@@ -14,7 +14,6 @@ export function createOrmConfig(dbName = process.env.POSTGRES_DB) {
     migrations: {
       path: 'src/infra/database/migrations',
       pathTs: 'src/infra/database/migrations',
-      snapshot: false,
       transactional: true,
       allOrNothing: true,
     },
