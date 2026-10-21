@@ -80,6 +80,10 @@ describe('Money', () => {
 
       expect(original.toJSON().amount).toBe('100.00');
     });
+
+    it('never serializes a negative zero', () => {
+      expect(Money.zero('BRL').negate().toJSON().amount).toBe('0.00');
+    });
   });
 
   describe('comparison', () => {
