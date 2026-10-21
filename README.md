@@ -43,20 +43,21 @@ bun run test:integration
 
 ## Comandos
 
-| Comando                    | O que faz                                       |
-| -------------------------- | ----------------------------------------------- |
-| `bun run start`            | sobe a aplicação                                |
-| `bun run start:dev`        | sobe a aplicação recarregando a cada alteração  |
-| `bun run start:debug`      | sobe com o inspector ativo e recarga automática |
-| `bun run test`             | roda todos os testes                            |
-| `bun run test:unit`        | roda só os testes de unidade                    |
-| `bun run test:integration` | roda só os testes de integração                 |
-| `bun run test:watch`       | roda os testes a cada alteração                 |
-| `bun run test:cov`         | roda os testes com cobertura                    |
-| `bun run migration:up`     | aplica as migrações pendentes                   |
-| `bun run migration:down`   | desfaz a última migração                        |
-| `bun run migration:list`   | lista as migrações já aplicadas                 |
-| `bun run migration:create` | cria uma migração vazia para escrever à mão     |
-| `bun run typecheck`        | checa os tipos com o compilador do TypeScript   |
-| `bun run lint`             | roda o linter                                   |
-| `bun run format`           | formata o código                                |
+| Comando                          | O que faz                                       |
+| -------------------------------- | ----------------------------------------------- |
+| `bun run start`                  | sobe a aplicação                                |
+| `bun run start:dev`              | sobe a aplicação recarregando a cada alteração  |
+| `bun run start:debug`            | sobe com o inspector ativo e recarga automática |
+| `bun run test`                   | roda todos os testes                            |
+| `bun run test:unit`              | roda só os testes de unidade                    |
+| `bun run test:integration`       | roda só os testes de integração                 |
+| `bun run test:watch`             | roda os testes a cada alteração                 |
+| `bun run test:cov`               | roda os testes com cobertura                    |
+| `bun run migration:up`           | aplica as migrações pendentes                   |
+| `bun run migration:down`         | desfaz a última migração                        |
+| `bun run migration:list`         | lista as migrações já aplicadas                 |
+| `bun run migration:create`       | gera uma migração a partir das entidades do ORM |
+| `bun run migration:create:blank` | cria uma migração vazia para escrever à mão     |
+| `bun run typecheck`              | checa os tipos com o compilador do TypeScript   |
+| `bun run lint`                   | roda o linter                                   |
+| `bun run format`                 | formata o código                                |
