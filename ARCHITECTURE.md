@@ -36,3 +36,17 @@ Usam o PostgreSQL real, sem mock. Cada arquivo de teste cria um banco aleatório
 - testes em paralelo não interferem entre si;
 - o ledger não permite apagar linhas;
 - todo teste também prova que as migrações funcionam.
+
+## Erros globais de regras de negócio
+
+O `src/domain/shared/domain-error.ts` é uma classe abstrata que é a base de todos os erros de regra de negócio. Cada erro possui um código próprio que a camada HTTP pode usar para escolher o status da resposta sem depender do texto da mensagem.
+
+## Money
+
+O `decimal.js` foi a escolha final para lidar com o dinheiro, que faz as contas decimais exatas. O `number` é proibido para dinheiro.
+
+As regras de entrada são lidadas com o `Money.from` que transforma, por exemplo, `'25.5'` em `'25.50'`, os valores saem como string e com duas casas.
+
+O `money.erros.ts` cuida de implementar os erros referentes ao Money.
+
+As funções privadas `assertSameCurrency` e `assertValidCurrency` cuidam de validar a moeda antes de retornar o que alguns métodos aritméticos prometem, validando se o currency é da mesma moeda, e se a entrada dele é válida.
