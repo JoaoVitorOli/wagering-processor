@@ -49,6 +49,8 @@ O `decimal.js` foi a escolha final para lidar com o dinheiro, que faz as contas 
 
 As regras de entrada são lidadas com o `Money.from` que transforma, por exemplo, `'25.5'` em `'25.50'`, os valores saem como string e com duas casas.
 
+As regras de entrada inclui a recusa de: NaN, Infinity, notação científica, vazio, mais de 2 casas depois do ponto (mais de 2 casas não é arredondado, é recusado), negativo, `+`, vírgula, espaços.
+
 O `money.erros.ts` cuida de implementar os erros referentes ao Money.
 
 As funções privadas `assertSameCurrency` e `assertValidCurrency` cuidam de validar a moeda antes de retornar o que alguns métodos aritméticos prometem, validando se o currency é da mesma moeda, e se a entrada dele é válida.
@@ -61,7 +63,7 @@ O `version` sempre começa por 1, só vai mudar quando o saldo for alterado.
 
 O `Wallet.open` cria o lançamento de abertura com saldo inicial maior que zero. Com saldo zero, não cria lançamento e o `version` não é alterado. Saldo inicial negativo é recusado.
 
-O `canDebit` apenas faz a consulta para garantir que se pode fazer um débito, se não puder, ele devolve o erro certo.
+O `canDebit` apenas faz a consulta para garantir que se pode fazer um débito.
 
 O lançamento é criado e validado antes de a carteira mudar. Se a validação falhar, a carteira fica exatamente como estava.
 
