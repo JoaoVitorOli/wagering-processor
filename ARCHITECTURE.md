@@ -43,10 +43,30 @@ O `src/domain/shared/domain-error.ts` é uma classe abstrata que é a base de to
 
 ## Money
 
-O `decimal.js` foi a escolha final para lidar com o dinheiro, que faz as contas decimais exatas. O `number` é proibido para dinheiro.
+O `decimal.js` foi a escolha final para lidar com o dinheiro, que faz as contas decimais exatas, como por exemplo: o `decimal.js` garante que `0.1 + 0.2` seja `0.3`. O `number` é proibido para dinheiro.
 
 As regras de entrada são lidadas com o `Money.from` que transforma, por exemplo, `'25.5'` em `'25.50'`, os valores saem como string e com duas casas.
 
 O `money.erros.ts` cuida de implementar os erros referentes ao Money.
 
 As funções privadas `assertSameCurrency` e `assertValidCurrency` cuidam de validar a moeda antes de retornar o que alguns métodos aritméticos prometem, validando se o currency é da mesma moeda, e se a entrada dele é válida.
+
+## Wallet e ledger
+
+A `Wallet` é o aggregate root, o saldo só muda por `debit` e `credit`, os dois sempre geram o lançamento, os dois devolvem o `WalletLedgerEntry` correspondente.
+
+O `version` sempre começa por 1, só vai mudar quando o saldo for alterado.
+
+O `Wallet.open` cria o lançamento de abertura com saldo inicial maior que zero. Com saldo zero, não cria lançamento e o `version` não é alterado. Saldo inicial negativo é recusado.
+
+O `canDebit` apenas faz a consulta para garantir que se pode fazer um débito, se não puder, ele devolve o erro certo.
+
+O lançamento é criado e validado antes de a carteira mudar. Se a validação falhar, a carteira fica exatamente como estava.
+
+O `WalletLedgerEntry` não tem nenhum campo que possa mudar: além do `readonly`, o objeto é congelado com `Object.freeze`, então qualquer tentativa de alteração lança erro em tempo de execução.
+
+## Criação e rehydrate
+
+`Wallet.open` e `WalletLedgerEntry.create` são usados para o que está nascendo agora, e validam todas as regras.
+
+`rehydrate` reconstrói o que veio do banco, sem validar e sem mudar a versão. O dado já foi validado quando nasceu, e revalidar impediria ler registros antigos se uma regra mudasse.
