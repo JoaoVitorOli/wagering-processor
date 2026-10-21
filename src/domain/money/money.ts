@@ -1,5 +1,5 @@
 import { Decimal } from 'decimal.js';
-import { CurrencyMismatchError, InvalidMoneyError } from './money-errors.js';
+import { CurrencyMismatchError, InvalidMoneyError } from './money.errors.js';
 
 export interface MoneyProps {
   amount: string;

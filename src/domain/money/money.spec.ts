@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'bun:test';
 import { Money } from './money.js';
-import { CurrencyMismatchError, InvalidMoneyError } from './money-errors.js';
+import { CurrencyMismatchError, InvalidMoneyError } from './money.errors.js';
 
 const brl = (amount: string) => Money.from({ amount, currency: 'BRL' });
 const usd = (amount: string) => Money.from({ amount, currency: 'USD' });
