@@ -49,11 +49,11 @@ O `decimal.js` foi a escolha final para lidar com o dinheiro, que faz as contas 
 
 As regras de entrada são lidadas com o `Money.from` que transforma, por exemplo, `'25.5'` em `'25.50'`, os valores saem como string e com duas casas.
 
-As regras de entrada inclui a recusa de: NaN, Infinity, notação científica, vazio, mais de 2 casas depois do ponto (mais de 2 casas não é arredondado, é recusado), negativo, `+`, vírgula, espaços.
+As regras de entrada incluem a recusa de: NaN, Infinity, notação científica, vazio, mais de 2 casas depois do ponto (mais de 2 casas não é arredondado, é recusado), negativo, `+`, vírgula, espaços.
 
 O `money.erros.ts` cuida de implementar os erros referentes ao Money.
 
-As funções privadas `assertSameCurrency` e `assertValidCurrency` cuidam de validar a moeda antes de retornar o que alguns métodos aritméticos prometem, validando se o currency é da mesma moeda, e se a entrada dele é válida.
+Somar, subtrair e comparar com `isLessThan` lançam `CurrencyMismatchError`, porque não têm resposta sem câmbio. Já `equals` devolve `false`, porque valores em moedas diferentes simplesmente não são iguais.
 
 ## Wallet e ledger
 
@@ -74,3 +74,46 @@ O `WalletLedgerEntry` não tem nenhum campo que possa mudar: além do `readonly`
 `Wallet.open` e `WalletLedgerEntry.create` são usados para o que está nascendo agora, e validam todas as regras.
 
 `rehydrate` reconstrói o que veio do banco, sem validar e sem mudar a versão. O dado já foi validado quando nasceu, e revalidar impediria ler registros antigos se uma regra mudasse.
+
+## Transações
+
+Aqui toda a operação gera transação, mas só as que movem dinheiro geram lançamento, então uma BET que é rejeitada, por exemplo, é registrada sem mexer no ledger.
+
+Na transação de abertura é usado o provedor `internal` e identificadores derivados do id da carteira, o que impede duas aberturas para a mesma carteira. Já nasce como `PROCESSED`, porque acontece junto com a criação da carteira e não tem regra a avaliar.
+
+## Status e transições
+
+```
+PENDING ──► PENDING_REFERENCE ──► PROCESSED | REJECTED | FAILED
+   └────────────────────────────► PROCESSED | REJECTED | FAILED
+```
+
+- `PENDING`: recebida, ainda não aplicada.
+- `PENDING_REFERENCE`: aguardando a transação referenciada chegar.
+- `PROCESSED`, `REJECTED` e `FAILED` são finais. Tentar mudar uma transação finalizada lança `InvalidTransactionStateError`, porque isso só acontece por erro de programação. O provedor já recebeu a resposta e o ledger já foi gravado; para desfazer algo, é preciso uma nova operação (REFUND ou ROLLBACK).
+
+As transições permitidas ficam numa tabela no código, e é ela que define quais status são finais.
+
+## Efeito de cada operação
+
+- BET - débito
+- WIN, REFUND, OPENING - crédito
+- LOSS - nenhum
+- ROLLBACK - o inverso das referências acima, crédito para BET e débito para WIN e REFUND.
+
+O enunciado diz que o WIN "pode" referenciar a BET. Então WIN e LOSS são aceitos com ou sem referência.
+
+A BET com referência é recusada, porque uma aposta não reverte nem completa outra operação.
+
+A transação que referencia a si mesma é recusada também, ela ficaria esperando por ela mesma eternamente.
+
+O enunciado não definiu o valor do LOSS, então ele aceita `0.00`, porque não move saldo e só registra o resultado da rodada. As demais operações exigem valor positivo.
+
+## Saldo no resultado
+
+A transação guarda o saldo de quando terminou (`resultBalance`). Assim, uma requisição repetida devolve exatamente a resposta original, com o saldo daquele momento, e não o saldo atual.
+
+## Códigos de falha (`failure-code`)
+
+- `INSUFFICIENT_FUNDS` - Sem fundos suficientes para fazer a aposta. O provedor não deve reenviar a mesma operação
+- `PROCESSING_FAILED` - Erro permanente de infraestrutura, deve ser investigado antes de reenviar.
