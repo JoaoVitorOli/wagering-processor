@@ -10,19 +10,32 @@
   "engines": {
     "bun": "1.4.3"
   },
+  "mikro-orm": {
+    "configPaths": ["./src/infra/database/mikro-orm.config.ts"]
+  },
   "scripts": {
     "typecheck": "tsc --noEmit",
-    "format": "prettier --write \"src/**/*.ts\"",
+    "format": "prettier --write \"src/**/*.ts\" \"test/**/*.ts\"",
     "start": "bun run src/main.ts",
     "start:dev": "bun --watch src/main.ts",
     "start:debug": "bun --inspect --watch src/main.ts",
-    "lint": "oxlint src/",
+    "lint": "oxlint src/ test/",
     "test": "bun test",
     "test:watch": "bun test --watch",
     "test:cov": "bun test --coverage",
-    "test:debug": "bun test --inspect-brk"
+    "test:debug": "bun test --inspect-brk",
+    "migration:create": "bun --env-file=.env --bun mikro-orm migration:create --blank",
+    "migration:up": "bun --env-file=.env --bun mikro-orm migration:up",
+    "migration:down": "bun --env-file=.env --bun mikro-orm migration:down",
+    "migration:list": "bun --env-file=.env --bun mikro-orm migration:list",
+    "test:unit": "bun test src",
+    "test:integration": "bun test test/integration"
   },
   "dependencies": {
+    "@mikro-orm/core": "7.2.5",
+    "@mikro-orm/migrations": "7.2.5",
+    "@mikro-orm/nestjs": "7.1.0",
+    "@mikro-orm/postgresql": "7.2.5",
     "@nestjs/common": "^12.0.1",
     "@nestjs/core": "^12.0.1",
     "@nestjs/platform-express": "^12.0.1",
@@ -30,6 +43,7 @@
     "rxjs": "^7.8.1"
   },
   "devDependencies": {
+    "@mikro-orm/cli": "7.2.5",
     "@nestjs/testing": "^12.0.1",
     "@types/bun": "^1.4.3",
     "@types/express": "^5.0.0",
