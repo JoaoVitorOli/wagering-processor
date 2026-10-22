@@ -235,7 +235,7 @@ describe('wagering HTTP: BET', () => {
     });
 
     it.each([
-      ['a kind other than BET', { kind: 'WIN' }],
+      ['an unknown kind', { kind: 'OPENING' }],
       ['a walletId that is not a UUID', { walletId: 'wallet-1' }],
       ['a numeric amount', { money: { amount: 25, currency: 'BRL' } }],
     ])('rejects %s with 400', async (_, overrides) => {

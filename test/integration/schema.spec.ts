@@ -324,7 +324,7 @@ describe('database schema', () => {
       });
     });
 
-    describe('one reversal per kind', () => {
+    describe('one reversal per reference', () => {
       async function processedReversal(
         reference: {
           id: string;
@@ -351,15 +351,17 @@ describe('database schema', () => {
         await processedReversal(bet, 'REFUND');
 
         await expect(processedReversal(bet, 'REFUND')).rejects.toMatchObject({
-          constraint: 'wager_transactions_one_reversal_per_kind',
+          constraint: 'wager_transactions_one_reversal_per_reference',
         });
       });
 
-      it('accepts a REFUND and a ROLLBACK of the same transaction', async () => {
+      it('rejects a ROLLBACK of a transaction that already has a REFUND', async () => {
         const bet = await insertTransaction();
         await processedReversal(bet, 'REFUND');
 
-        await expect(processedReversal(bet, 'ROLLBACK')).resolves.toBeDefined();
+        await expect(processedReversal(bet, 'ROLLBACK')).rejects.toMatchObject({
+          constraint: 'wager_transactions_one_reversal_per_reference',
+        });
       });
 
       it('ignores rejected reversals', async () => {

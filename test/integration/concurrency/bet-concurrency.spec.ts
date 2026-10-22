@@ -8,6 +8,7 @@ import {
   betFor,
   createWallet,
   submit,
+  transactionFor,
   type WalletRef,
 } from '../../support/wagering-client.js';
 
@@ -123,6 +124,37 @@ describe('BET concurrency', () => {
       balance: '0.00',
       ledger_balance: '0.00',
       debits: '10',
+    });
+  });
+
+  it('reverses a BET only once when a REFUND and a ROLLBACK arrive together', async () => {
+    const wallet = await createWallet(app.url, '100.00');
+    const bet = betFor(wallet, '25.00');
+    await submit(app.url, bet);
+
+    const responses = await Promise.all(
+      ['REFUND', 'ROLLBACK'].map((kind, index) =>
+        submit(
+          instances[index].url,
+          transactionFor(wallet, kind, '25.00', {
+            referenceExternalTransactionId: bet.externalTransactionId,
+          }),
+        ),
+      ),
+    );
+    const bodies = await Promise.all(responses.map((r) => r.json()));
+
+    expect(bodies.map((body) => body.status).sort()).toEqual([
+      'PROCESSED',
+      'REJECTED',
+    ]);
+    expect(bodies.find((body) => body.status === 'REJECTED')).toMatchObject({
+      failureCode: 'REFERENCE_ALREADY_REVERSED',
+    });
+    expect(await ledgerOf(wallet)).toEqual({
+      balance: '100.00',
+      ledger_balance: '100.00',
+      debits: '1',
     });
   });
 
