@@ -33,8 +33,8 @@ export const WagerTransactionSchema = defineEntity({
   uniques: [
     { properties: ['providerId', 'externalTransactionId'] },
     {
-      name: 'wager_transactions_one_reversal_per_kind',
-      properties: ['referenceTransaction', 'kind'],
+      name: 'wager_transactions_one_reversal_per_reference',
+      properties: ['referenceTransaction'],
       where: "status = 'PROCESSED' and kind in ('REFUND', 'ROLLBACK')",
     },
   ],
