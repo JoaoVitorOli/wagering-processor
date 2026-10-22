@@ -29,6 +29,35 @@ Para desenvolver com recarga automática:
 bun run start:dev
 ```
 
+## API
+
+| Método | Rota                     | O que faz                                 |
+| ------ | ------------------------ | ----------------------------------------- |
+| `POST` | `/wallets`               | cria uma carteira                         |
+| `GET`  | `/wallets/:walletId`     | consulta uma carteira                     |
+| `POST` | `/wagering/transactions` | submete uma transação (por ora, só `BET`) |
+
+Criar uma carteira com saldo inicial:
+
+```bash
+curl -s -X POST localhost:3000/wallets \
+  -H 'content-type: application/json' \
+  -d '{"playerId":"0192f28f-5dc0-7d58-bdb2-814ad6a0f4a1","initialBalance":{"amount":"1000.00","currency":"BRL"}}'
+```
+
+Submeter uma aposta (troque `<walletId>` pelo `id` devolvido acima):
+
+```bash
+curl -s -X POST localhost:3000/wagering/transactions \
+  -H 'content-type: application/json' \
+  -H 'Idempotency-Key: provider-a:transaction-123' \
+  -d '{"providerId":"provider-a","externalTransactionId":"transaction-123","playerId":"0192f28f-5dc0-7d58-bdb2-814ad6a0f4a1","walletId":"<walletId>","roundId":"round-987","gameId":"fortune-chimp","kind":"BET","money":{"amount":"25.00","currency":"BRL"}}'
+```
+
+Repetir o mesmo comando devolve a mesma resposta com `"idempotentReplay": true`, sem debitar de novo.
+
+Valores de dinheiro são sempre strings decimais com até duas casas (`"25.00"`). Os status HTTP, os códigos de erro e as regras de idempotência estão em [ARCHITECTURE.md](ARCHITECTURE.md).
+
 ## Testes
 
 ```bash
@@ -53,6 +82,7 @@ bun run test:integration
 | `bun run test:integration`       | roda só os testes de integração                 |
 | `bun run test:watch`             | roda os testes a cada alteração                 |
 | `bun run test:cov`               | roda os testes com cobertura                    |
+| `bun run test:debug`             | roda os testes com o inspector ativo            |
 | `bun run migration:up`           | aplica as migrações pendentes                   |
 | `bun run migration:down`         | desfaz a última migração                        |
 | `bun run migration:list`         | lista as migrações já aplicadas                 |
