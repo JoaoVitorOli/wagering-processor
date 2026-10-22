@@ -3,6 +3,29 @@
 Este documento explica como o serviço funciona, as decisões técnicas tomadas,
 os trade-offs aceitos e as limitações conhecidas.
 
+## Stack
+
+- **Bun 1.4.3**: runtime, gerenciador de pacotes e test runner (exigência do enunciado), sem etapa de build.
+- **TypeScript 6** em modo estrito.
+- **NestJS 12**: módulos e injeção de dependência só nas camadas `interfaces` e `infra`.
+- **PostgreSQL 16** no Docker Compose (`postgres:16-alpine`).
+- **MikroORM 7.2.5**: a opção preferencial do enunciado; transações explícitas e locks.
+- **decimal.js 10.6.0**: aritmética decimal exata dentro do `Money`.
+- **zod 4.6.5**: validação do formato das requisições.
+
+Ferramentas de desenvolvimento: oxlint e Prettier.
+
+As bibliotecas que tocam dinheiro e banco (MikroORM, decimal.js, zod) têm versão exata no `package.json`, para que todo ambiente rode o mesmo código.
+
+## Camadas
+
+- `src/domain`: regras de negócio (`Money`, `Wallet`, `WagerTransaction`). Não importa Nest nem ORM.
+- `src/application`: casos de uso e portas (interfaces como `UnitOfWork`, `Clock`, `IdGenerator`). Também não importa Nest nem ORM.
+- `src/infra`: implementa as portas (MikroORM, relógio do sistema, UUIDv7).
+- `src/interfaces/http`: controllers, validação de entrada e tradução de erros para status HTTP.
+
+As dependências apontam para dentro: `interfaces` e `infra` conhecem `application` e `domain`, nunca o contrário. Os módulos do Nest ligam cada porta à sua implementação com `useFactory`. Por isso os casos de uso podem ser testados sem Nest e sem banco, e o mesmo caso de uso vai servir ao HTTP e ao consumidor SQS.
+
 ## Ferramentas de execução
 
 O runtime do projeto é feito usando Bun, assim como exigido no enunciado. A versão fica fixa em `packageManager` e `engines` no `package.json` para que todo mundo rode a mesma versão. O Bun também é o gerenciador de pacotes e o test runner.
@@ -27,6 +50,16 @@ As entidades persistentes ficam em `src/infra/database/entities` e são feitas u
 
 Os valores são definidos com `p.decimal('string').precision(18).scale(2)` que no final são `numeric(18,2)`, que são lidos como string. Nunca passam por number.
 
+Os mappers (`src/infra/database/mappers`) convertem o domínio na linha do banco e de volta. A leitura usa `rehydrate`, e o dinheiro volta com `Money.from`.
+
+A gravação usa `em.insert`, um INSERT direto, sem o rastreamento de mudanças do ORM: o domínio não é entidade do ORM, e o que vai para o banco fica explícito.
+
+## Unit of Work
+
+A transação SQL é explícita no caso de uso, tudo o que roda dentro de `unitOfWork.run(...)` usa a mesma transação (`em.transactional`). Os repositórios chegam como parâmetro, criados com o `EntityManager` daquela transação, então não existe repositório que escreva fora dela.
+
+Na criação de carteira, a carteira, a transação OPENING e o lançamento de abertura são gravados juntos. Se qualquer insert falhar, o rollback desfaz os outros.
+
 ## Garantias do banco
 
 O domínio recusa primeiro, com erro claro e código estável. O banco recusa sempre, para qualquer caminho que chegue nele. O domínio decide e o banco garante.
@@ -44,6 +77,8 @@ Transações:
 - REFUND e ROLLBACK exigem referência, OPENING e BET não têm, e ninguém referencia a si mesmo;
 - `failure_code` só em REJECTED/FAILED, `processed_at` só nos status finais;
 - uma reversão processada por tipo para a mesma referência (índice único parcial).
+
+Criar carteira não faz SELECT antes do INSERT. Duas requisições simultâneas veriam "não existe" ao mesmo tempo, então o SELECT não protegeria. Quem decide é a `unique (player_id, currency)`: o repositório traduz a violação em `WalletAlreadyExistsError`, que vira 409. Um teste com 5 requisições simultâneas confirma que só uma grava.
 
 O índice de reversão ignora `NULL`. Por isso o `reversal_resolved_check` obriga toda reversão processada a apontar para a transação revertida, sem ele, uma reversão com referência nula escaparia do índice e a mesma transação poderia ser revertida duas vezes.
 
@@ -67,6 +102,8 @@ Usam o PostgreSQL real, sem mock. Cada arquivo de teste cria um banco aleatório
 
 O teste de integração dos schemas conferem o nome da constraint que é retornada quando algo errado é passado, há também casos positivos validando outra moeda, outro provedor, LOSS com 0, REFUND + ROLLBACK da mesma referência.
 
+Os testes HTTP sobem o `AppModule` real e trocam só a configuração do banco (`ORM_CONFIG`), apontando para o banco descartável. As requisições usam `fetch` numa porta livre. Além das respostas, os testes conferem direto no banco que a OPENING e o lançamento foram gravados.
+
 ## Erros globais de regras de negócio
 
 O `src/domain/shared/domain-error.ts` é uma classe abstrata que é a base de todos os erros de regra de negócio. Cada erro possui um código próprio que a camada HTTP pode usar para escolher o status da resposta sem depender do texto da mensagem.
@@ -79,7 +116,7 @@ As regras de entrada são lidadas com o `Money.from` que transforma, por exemplo
 
 As regras de entrada incluem a recusa de: NaN, Infinity, notação científica, vazio, mais de 2 casas depois do ponto (mais de 2 casas não é arredondado, é recusado), negativo, `+`, vírgula, espaços.
 
-O `money.erros.ts` cuida de implementar os erros referentes ao Money.
+O `money.errors.ts` cuida de implementar os erros referentes ao Money.
 
 Somar, subtrair e comparar com `isLessThan` lançam `CurrencyMismatchError`, porque não têm resposta sem câmbio. Já `equals` devolve `false`, porque valores em moedas diferentes simplesmente não são iguais.
 
@@ -102,6 +139,12 @@ O `WalletLedgerEntry` não tem nenhum campo que possa mudar: além do `readonly`
 `Wallet.open` e `WalletLedgerEntry.create` são usados para o que está nascendo agora, e validam todas as regras.
 
 `rehydrate` reconstrói o que veio do banco, sem validar e sem mudar a versão. O dado já foi validado quando nasceu, e revalidar impediria ler registros antigos se uma regra mudasse.
+
+## Ids e datas
+
+O domínio não gera ids nem lê o relógio: recebe tudo pronto. Quem gera é a aplicação, pelas portas `IdGenerator` e `Clock`, e os testes podem usar valores fixos.
+
+Os ids são UUIDv7 (`Bun.randomUUIDv7()`), como nos exemplos do enunciado. Eles começam pelo horário, então cada id novo entra no fim do índice da chave primária, e não em posições aleatórias.
 
 ## Transações
 
@@ -149,3 +192,16 @@ A transação guarda o saldo de quando terminou (`resultBalance`). Assim, uma re
 - `PROCESSING_FAILED` - Erro permanente de infraestrutura, deve ser investigado antes de reenviar.
 
 O `failure code` não possui um CHECK de lista, ele é um varchar e foi definido assim porque ele vai crescer conforme o desenvolvimento, e o campo não mexe com dinheiro.
+
+## API
+
+A validação da API acontece em dois níveis. Foi usado o `Zod` para conferir o formato (`playerId` é UUID, `amount` e `currency` são strings) e responde 400 `INVALID_PAYLOAD` com os campos que estão errados. O domínio `Money` cuida das regras do valor, que responde com `INVALID_MONEY`.
+
+Todo erro responde no formato `{ code, message }`. O `DomainErrorFilter` escolhe o status pelo `code`:
+
+- 400: `INVALID_PAYLOAD`, `INVALID_MONEY`
+- 404: `WALLET_NOT_FOUND`
+- 409: `WALLET_ALREADY_EXISTS`
+- 500: qualquer código sem mapeamento; a mensagem interna vai para o log e não para a resposta
+
+O filtro para esses erros é registrado com o `APP_FILTER` no `AppModule`, dessa forma os testes tem acesso as mensagens de filtro.
