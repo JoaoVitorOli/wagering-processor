@@ -7,10 +7,15 @@ export const UNIT_OF_WORK = Symbol('UnitOfWork');
 export interface WalletRepository {
   add(wallet: Wallet): Promise<void>;
   findById(id: string): Promise<Wallet | undefined>;
+  findByIdForUpdate(id: string): Promise<Wallet | undefined>;
+  update(wallet: Wallet, expectedVersion: number): Promise<void>;
 }
 
 export interface WagerTransactionRepository {
   add(transaction: WagerTransaction): Promise<void>;
+  addIfAbsent(transaction: WagerTransaction): Promise<boolean>;
+  findByIdempotencyKey(key: string): Promise<WagerTransaction | undefined>;
+  update(transaction: WagerTransaction): Promise<void>;
 }
 
 export interface LedgerRepository {
