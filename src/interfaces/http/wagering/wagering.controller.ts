@@ -1,6 +1,6 @@
 import { Body, Controller, Post, Res } from '@nestjs/common';
 import type { Response } from 'express';
-import { SubmitBetUseCase } from '../../../application/wagering/submit-bet.use-case.js';
+import { SubmitWagerTransactionUseCase } from '../../../application/wagering/submit-wager-transaction.use-case.js';
 import { ZodValidationPipe } from '../zod-validation.pipe.js';
 import { IdempotencyKey } from './idempotency-key.decorator.js';
 import {
@@ -16,7 +16,9 @@ import {
 
 @Controller('wagering/transactions')
 export class WageringController {
-  constructor(private readonly submitBet: SubmitBetUseCase) {}
+  constructor(
+    private readonly submitTransaction: SubmitWagerTransactionUseCase,
+  ) {}
 
   @Post()
   async submit(
@@ -26,10 +28,11 @@ export class WageringController {
     body: SubmitTransactionRequest,
     @Res({ passthrough: true }) response: Response,
   ): Promise<TransactionResponse> {
-    const { transaction, idempotentReplay } = await this.submitBet.execute({
-      idempotencyKey,
-      ...body,
-    });
+    const { transaction, idempotentReplay } =
+      await this.submitTransaction.execute({
+        idempotencyKey,
+        ...body,
+      });
     response.status(httpStatusFor(transaction));
     return toTransactionResponse(transaction, idempotentReplay);
   }

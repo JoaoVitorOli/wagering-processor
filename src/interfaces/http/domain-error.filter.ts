@@ -11,6 +11,7 @@ import { DomainError } from '../../domain/shared/domain-error.js';
 const STATUS_BY_CODE: Record<string, HttpStatus> = {
   INVALID_MONEY: HttpStatus.BAD_REQUEST,
   INVALID_MOVEMENT_AMOUNT: HttpStatus.BAD_REQUEST,
+  INVALID_WAGER_TRANSACTION: HttpStatus.BAD_REQUEST,
   WALLET_NOT_FOUND: HttpStatus.NOT_FOUND,
   WALLET_ALREADY_EXISTS: HttpStatus.CONFLICT,
   IDEMPOTENCY_CONFLICT: HttpStatus.CONFLICT,
