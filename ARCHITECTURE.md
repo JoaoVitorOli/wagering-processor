@@ -104,6 +104,8 @@ O teste de integração dos schemas conferem o nome da constraint que é retorna
 
 Os testes HTTP sobem o `AppModule` real e trocam só a configuração do banco (`ORM_CONFIG`), apontando para o banco descartável. As requisições usam `fetch` numa porta livre. Além das respostas, os testes conferem direto no banco que a OPENING e o lançamento foram gravados.
 
+Os testes de concorrência sobem três instâncias da aplicação apontando para o mesmo banco e disparam requisições em paralelo: duas apostas de 80 numa carteira de 100, 50 cópias da mesma aposta e 45 requisições espalhadas pelas três instâncias. Também conferem que travar uma carteira não bloqueia outra e que um lock além do limite responde 503, com o reenvio aplicado uma vez. Todos terminam conferindo que o saldo da carteira é igual à soma do ledger. Sem o `FOR UPDATE`, esses testes falham.
+
 ## Erros globais de regras de negócio
 
 O `src/domain/shared/domain-error.ts` é uma classe abstrata que é a base de todos os erros de regra de negócio. Cada erro possui um código próprio que a camada HTTP pode usar para escolher o status da resposta sem depender do texto da mensagem.
@@ -166,6 +168,26 @@ O `payloadHash` é o SHA-256 de um JSON canônico dos campos de negócio: chaves
 
 A transação é gravada com `INSERT ... ON CONFLICT DO NOTHING`. Se nada foi inserido, ela já existe: a busca pela chave decide entre replay e conflito, e, se a chave não existe, quem barrou foi a unique do id externo.
 
+## Concorrência
+
+Não existem lock global, então não há bloqueio de carteiras diferentes.
+
+A unidade de concorrência é a carteira. Toda operação que mexe no saldo começa travando a linha da carteira (`SELECT ... FOR UPDATE`) e só solta no commit ou no rollback.
+
+O lock é pessimista, dessa forma toda aposta naquela carteira espera a sua vez. No otimista, toda aposta teria que repetir.
+
+O fluxo de uma BET acontece numa única transação SQL:
+
+1. trava a carteira;
+2. grava a transação como PENDING (`ON CONFLICT DO NOTHING`); se já existia, replay ou conflito;
+3. confere moeda, jogador e saldo; se falhar, REJECTED com `failureCode`;
+4. debita a carteira e grava o lançamento;
+5. atualiza a transação para o status final e faz o commit.
+
+Cada transação tem `lock_timeout` (`LOCK_TIMEOUT_MS`, padrão 5 s). Se a carteira continuar travada além disso, a requisição responde 503 em vez de esperar para sempre e segurar conexões.
+
+Fazer o reenvio é seguro, pois o erro acontece antes do commit, quer dizer que houve o rollback e nada foi gravado. Caso o provedor reenvie, a idempotência aplica só a primeira.
+
 ## Status e transições
 
 ```
@@ -225,5 +247,8 @@ Todo erro responde no formato `{ code, message }`. O `DomainErrorFilter` escolhe
 - 404: `WALLET_NOT_FOUND`
 - 409: `WALLET_ALREADY_EXISTS`, `IDEMPOTENCY_CONFLICT`, `EXTERNAL_TRANSACTION_CONFLICT`
 - 500: qualquer código sem mapeamento; a mensagem interna vai para o log e não para a resposta
+- 503: `TEMPORARILY_UNAVAILABLE` (lock timeout, deadlock ou queda de conexão), com `Retry-After: 1`; pode ser reenviado
+
+Os erros do banco passam pelo `DatabaseErrorFilter`: os transitórios viram 503 e os demais viram 500, sem expor SQL na resposta.
 
 O filtro para esses erros é registrado com o `APP_FILTER` no `AppModule`, dessa forma os testes tem acesso as mensagens de filtro.
