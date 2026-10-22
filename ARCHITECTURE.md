@@ -23,13 +23,25 @@ PostgreSQL com MikroORM, a opção preferencial do enunciado. Os pacotes do Mikr
 
 A função `createOrmConfig` (`src/infra/database/mikro-orm.config.ts`) gera a configuração usada pela aplicação, pelo CLI e pelos testes. Os testes só trocam o nome do banco.
 
-### Migrações
+As entidades persistentes ficam em `src/infra/database/entities` e são feitas usando o `defineEntity`, sem decorators.
+
+Os valores são definidos com `p.decimal('string').precision(18).scale(2)` que no final são `numeric(18,2)`, que são lidos como string. Nunca passam por number.
+
+## Garantias do banco
+
+As regras de dinheiro são validadas pelo domínio que o recusa primeiro com um erro claro e código estável para a resposta HTTP. O banco recusa sempre para qualquer caminho que chegue nele, seja um bug, um script, um caminho novo no código. O domínio decide e o banco garante.
+
+O banco consegue garantir a concorrência. Duas requisições podem passar juntas pelo código, mas o banco consegue verificar usando a constraint `unique`, então uma é gravada e a outra recebe a violação e vira um replay.
+
+## Migrações
 
 São geradas de forma automática a partir do script `migration:create`, para migrações escritas a mão é usado o `migration:create:blank`.
 
 Rodam em transação, todas juntas (`transactional`, `allOrNothing`): ou o banco vai inteiro para a versão nova, ou fica na anterior.
 
 Os scripts usam `--bun` para o CLI ler a configuração em TypeScript e `--env-file=.env` porque, assim, o Bun não carrega o `.env` sozinho.
+
+O gerador cria todas as migrations, inclusive a trigger de UPDATE/DELETE. Com exceção do trigger de TRUNCATE, que é preciso ser feita a mão, pois o MikroORM não enxerga e recriaria ela a cada migração.
 
 ## Testes de integração
 
@@ -38,6 +50,8 @@ Usam o PostgreSQL real, sem mock. Cada arquivo de teste cria um banco aleatório
 - testes em paralelo não interferem entre si;
 - o ledger não permite apagar linhas;
 - todo teste também prova que as migrações funcionam.
+
+O teste de integração dos schemas conferem o nome da constraint que é retornada quando algo errado é passado, há também casos positivos validando outra moeda, outro provedor, LOSS com 0, REFUND + ROLLBACK da mesma referência.
 
 ## Erros globais de regras de negócio
 
@@ -81,6 +95,8 @@ Aqui toda a operação gera transação, mas só as que movem dinheiro geram lan
 
 Na transação de abertura é usado o provedor `internal` e identificadores derivados do id da carteira, o que impede duas aberturas para a mesma carteira. Já nasce como `PROCESSED`, porque acontece junto com a criação da carteira e não tem regra a avaliar.
 
+O banco não garante que a moeda da transação seja a da carteira, nem que a referência seja da mesma carteira. Quem garante é o caso de uso, dentro do lock da carteira.
+
 ## Status e transições
 
 ```
@@ -117,3 +133,5 @@ A transação guarda o saldo de quando terminou (`resultBalance`). Assim, uma re
 
 - `INSUFFICIENT_FUNDS` - Sem fundos suficientes para fazer a aposta. O provedor não deve reenviar a mesma operação
 - `PROCESSING_FAILED` - Erro permanente de infraestrutura, deve ser investigado antes de reenviar.
+
+O `failure code` não possui um CHECK de lista, ele é um varchar e foi definido assim porque ele vai crescer conforme o desenvolvimento, e o campo não mexe com dinheiro.
