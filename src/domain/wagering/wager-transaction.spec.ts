@@ -290,4 +290,66 @@ describe('WagerTransaction', () => {
 
     expect(transaction.status).toBe(WagerTransactionStatus.Processed);
   });
+  describe('references', () => {
+    const of = (
+      kind: WagerTransactionKind,
+      overrides: Partial<CreateWagerTransactionProps> = {},
+    ) =>
+      WagerTransaction.create(
+        props({
+          kind,
+          externalTransactionId: `external-${kind}`,
+          referenceExternalTransactionId:
+            kind === WagerTransactionKind.Bet ? undefined : 'external-1',
+          ...overrides,
+        }),
+      );
+    const target = (kind: WagerTransactionKind) =>
+      WagerTransaction.rehydrate({
+        ...props({ kind }),
+        status: WagerTransactionStatus.Processed,
+      });
+
+    it.each([
+      [WagerTransactionKind.Win, WagerTransactionKind.Bet, true],
+      [WagerTransactionKind.Loss, WagerTransactionKind.Bet, true],
+      [WagerTransactionKind.Refund, WagerTransactionKind.Bet, true],
+      [WagerTransactionKind.Refund, WagerTransactionKind.Win, false],
+      [WagerTransactionKind.Rollback, WagerTransactionKind.Bet, true],
+      [WagerTransactionKind.Rollback, WagerTransactionKind.Win, true],
+      [WagerTransactionKind.Rollback, WagerTransactionKind.Refund, true],
+      [WagerTransactionKind.Rollback, WagerTransactionKind.Rollback, false],
+      [WagerTransactionKind.Win, WagerTransactionKind.Win, false],
+    ])('%s referencing %s is allowed: %s', (kind, referenceKind, allowed) => {
+      expect(of(kind).canReference(target(referenceKind))).toBe(allowed);
+    });
+
+    it('shares context with a reference from the same provider, wallet, player, round and currency', () => {
+      expect(
+        of(WagerTransactionKind.Refund).sharesContextWith(
+          target(WagerTransactionKind.Bet),
+        ),
+      ).toBe(true);
+    });
+
+    it.each([
+      ['provider', { providerId: 'provider-b' }],
+      ['wallet', { walletId: 'wallet-2' }],
+      ['player', { playerId: 'player-2' }],
+      ['round', { roundId: 'round-2' }],
+      ['currency', { money: Money.from({ amount: '25.00', currency: 'USD' }) }],
+    ])('does not share context when the %s differs', (_, overrides) => {
+      expect(
+        of(WagerTransactionKind.Refund, overrides).sharesContextWith(
+          target(WagerTransactionKind.Bet),
+        ),
+      ).toBe(false);
+    });
+
+    it('identifies reversals', () => {
+      expect(of(WagerTransactionKind.Refund).isReversal()).toBe(true);
+      expect(of(WagerTransactionKind.Rollback).isReversal()).toBe(true);
+      expect(of(WagerTransactionKind.Win).isReversal()).toBe(false);
+    });
+  });
 });

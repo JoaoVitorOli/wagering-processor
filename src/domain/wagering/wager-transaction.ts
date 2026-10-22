@@ -52,6 +52,22 @@ const KINDS_WITHOUT_REFERENCE = [
   WagerTransactionKind.Bet,
 ];
 
+const ALLOWED_REFERENCE_KINDS: Record<
+  WagerTransactionKind,
+  readonly WagerTransactionKind[]
+> = {
+  [WagerTransactionKind.Opening]: [],
+  [WagerTransactionKind.Bet]: [],
+  [WagerTransactionKind.Win]: [WagerTransactionKind.Bet],
+  [WagerTransactionKind.Loss]: [WagerTransactionKind.Bet],
+  [WagerTransactionKind.Refund]: [WagerTransactionKind.Bet],
+  [WagerTransactionKind.Rollback]: [
+    WagerTransactionKind.Bet,
+    WagerTransactionKind.Win,
+    WagerTransactionKind.Refund,
+  ],
+};
+
 export const INTERNAL_PROVIDER_ID = 'internal';
 
 export interface CreateWagerTransactionProps {
@@ -224,7 +240,25 @@ export class WagerTransaction {
   }
 
   requiresReference(): boolean {
+    return this.isReversal();
+  }
+
+  isReversal(): boolean {
     return REVERSAL_KINDS.includes(this.kind);
+  }
+
+  canReference(reference: WagerTransaction): boolean {
+    return ALLOWED_REFERENCE_KINDS[this.kind].includes(reference.kind);
+  }
+
+  sharesContextWith(reference: WagerTransaction): boolean {
+    return (
+      this.providerId === reference.providerId &&
+      this.walletId === reference.walletId &&
+      this.playerId === reference.playerId &&
+      this.roundId === reference.roundId &&
+      this.money.currency === reference.money.currency
+    );
   }
 
   matchesPayload(payloadHash: string): boolean {
