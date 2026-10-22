@@ -18,6 +18,8 @@ export function createOrmConfig(dbName = process.env.POSTGRES_DB) {
       pathTs: 'src/infra/database/migrations',
       transactional: true,
       allOrNothing: true,
+      snapshotName: '.snapshot',
+      snapshotOnMigrate: false,
     },
   });
 }
