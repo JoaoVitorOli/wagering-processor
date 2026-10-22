@@ -1,6 +1,10 @@
 import type { EntityManager } from '@mikro-orm/postgresql';
 import type { WagerTransactionRepository } from '../../../application/ports/unit-of-work.js';
-import type { WagerTransaction } from '../../../domain/wagering/wager-transaction.js';
+import {
+  type WagerTransaction,
+  WagerTransactionKind,
+  WagerTransactionStatus,
+} from '../../../domain/wagering/wager-transaction.js';
 import { WagerTransactionSchema } from '../entities/wager-transaction.entity.js';
 import { WagerTransactionMapper } from '../mappers/wager-transaction.mapper.js';
 
@@ -33,6 +37,29 @@ export class MikroOrmWagerTransactionRepository implements WagerTransactionRepos
       { populate: ['wallet'] },
     );
     return record ? WagerTransactionMapper.toDomain(record) : undefined;
+  }
+
+  async findByExternalId(
+    providerId: string,
+    externalTransactionId: string,
+  ): Promise<WagerTransaction | undefined> {
+    const record = await this.em.findOne(
+      WagerTransactionSchema,
+      { providerId, externalTransactionId },
+      { populate: ['wallet'] },
+    );
+    return record ? WagerTransactionMapper.toDomain(record) : undefined;
+  }
+
+  async isReversed(transactionId: string): Promise<boolean> {
+    const reversals = await this.em.count(WagerTransactionSchema, {
+      referenceTransaction: transactionId,
+      status: WagerTransactionStatus.Processed,
+      kind: {
+        $in: [WagerTransactionKind.Refund, WagerTransactionKind.Rollback],
+      },
+    });
+    return reversals > 0;
   }
 
   async update(transaction: WagerTransaction): Promise<void> {
