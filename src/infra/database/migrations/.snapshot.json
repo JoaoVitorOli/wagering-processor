@@ -358,12 +358,11 @@
         },
         {
           "columnNames": [
-            "reference_transaction_id",
-            "kind"
+            "reference_transaction_id"
           ],
-          "composite": true,
+          "composite": false,
           "constraint": false,
-          "keyName": "wager_transactions_one_reversal_per_kind",
+          "keyName": "wager_transactions_one_reversal_per_reference",
           "primary": false,
           "unique": true,
           "where": "status = 'PROCESSED' and kind in ('REFUND', 'ROLLBACK')"
