@@ -13,4 +13,40 @@ export class MikroOrmWagerTransactionRepository implements WagerTransactionRepos
       WagerTransactionMapper.toRecord(transaction),
     );
   }
+
+  async addIfAbsent(transaction: WagerTransaction): Promise<boolean> {
+    const result = await this.em
+      .createQueryBuilder(WagerTransactionSchema)
+      .insert(WagerTransactionMapper.toRecord(transaction))
+      .onConflict()
+      .ignore()
+      .execute();
+    return result.affectedRows === 1;
+  }
+
+  async findByIdempotencyKey(
+    idempotencyKey: string,
+  ): Promise<WagerTransaction | undefined> {
+    const record = await this.em.findOne(
+      WagerTransactionSchema,
+      { idempotencyKey },
+      { populate: ['wallet'] },
+    );
+    return record ? WagerTransactionMapper.toDomain(record) : undefined;
+  }
+
+  async update(transaction: WagerTransaction): Promise<void> {
+    const record = WagerTransactionMapper.toRecord(transaction);
+    await this.em.nativeUpdate(
+      WagerTransactionSchema,
+      { id: transaction.id },
+      {
+        status: record.status,
+        failureCode: record.failureCode,
+        resultBalance: record.resultBalance,
+        referenceTransaction: record.referenceTransaction,
+        processedAt: record.processedAt,
+      },
+    );
+  }
 }
