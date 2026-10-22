@@ -15,6 +15,11 @@ export interface WagerTransactionRepository {
   add(transaction: WagerTransaction): Promise<void>;
   addIfAbsent(transaction: WagerTransaction): Promise<boolean>;
   findByIdempotencyKey(key: string): Promise<WagerTransaction | undefined>;
+  findByExternalId(
+    providerId: string,
+    externalTransactionId: string,
+  ): Promise<WagerTransaction | undefined>;
+  isReversed(transactionId: string): Promise<boolean>;
   update(transaction: WagerTransaction): Promise<void>;
 }
 
