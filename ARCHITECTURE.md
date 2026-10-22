@@ -154,6 +154,18 @@ Na transação de abertura é usado o provedor `internal` e identificadores deri
 
 O banco não garante que a moeda da transação seja a da carteira, nem que a referência seja da mesma carteira. Quem garante é o caso de uso, dentro do lock da carteira.
 
+## Idempotência
+
+O header `Idempotency-Key` é obrigatório e é a fonte da verdade. Sem ele, a resposta é 400.
+
+O `payloadHash` é o SHA-256 de um JSON canônico dos campos de negócio: chaves ordenadas em todos os níveis e campos ausentes fora. O header e os metadados de transporte não entram. O valor entra já normalizado pelo `Money`, então `25.5` e `25.50` são o mesmo pedido.
+
+- Mesma chave e mesmo hash: replay. Devolve o mesmo status e o mesmo corpo da primeira resposta, com `idempotentReplay: true` e o saldo daquele momento.
+- Mesma chave e hash diferente: 409 `IDEMPOTENCY_CONFLICT`, sem replay.
+- Mesmo `providerId` + `externalTransactionId` com outra chave: 409 `EXTERNAL_TRANSACTION_CONFLICT`. O id externo não pode virar duas transações.
+
+A transação é gravada com `INSERT ... ON CONFLICT DO NOTHING`. Se nada foi inserido, ela já existe: a busca pela chave decide entre replay e conflito, e, se a chave não existe, quem barrou foi a unique do id externo.
+
 ## Status e transições
 
 ```
@@ -186,10 +198,14 @@ O enunciado não definiu o valor do LOSS, então ele aceita `0.00`, porque não 
 
 A transação guarda o saldo de quando terminou (`resultBalance`). Assim, uma requisição repetida devolve exatamente a resposta original, com o saldo daquele momento, e não o saldo atual.
 
+O `resultBalance` é sempre o saldo da carteira, na moeda dela, inclusive quando a transação foi recusada por moeda diferente.
+
 ## Códigos de falha (`failure-code`)
 
 - `INSUFFICIENT_FUNDS` - Sem fundos suficientes para fazer a aposta. O provedor não deve reenviar a mesma operação
 - `PROCESSING_FAILED` - Erro permanente de infraestrutura, deve ser investigado antes de reenviar.
+- `CURRENCY_MISMATCH` - A moeda da transação é diferente da moeda da carteira. O provedor deve corrigir o payload, não reenviar igual.
+- `PLAYER_MISMATCH` - O jogador da transação não é o dono da carteira. O provedor deve corrigir o payload, não reenviar igual.
 
 O `failure code` não possui um CHECK de lista, ele é um varchar e foi definido assim porque ele vai crescer conforme o desenvolvimento, e o campo não mexe com dinheiro.
 
@@ -197,11 +213,17 @@ O `failure code` não possui um CHECK de lista, ele é um varchar e foi definido
 
 A validação da API acontece em dois níveis. Foi usado o `Zod` para conferir o formato (`playerId` é UUID, `amount` e `currency` são strings) e responde 400 `INVALID_PAYLOAD` com os campos que estão errados. O domínio `Money` cuida das regras do valor, que responde com `INVALID_MONEY`.
 
+A submissão de transação responde pelo status da transação, sempre com o corpo da transação:
+
+- 200: PROCESSED
+- 422: REJECTED por regra de negócio; o corpo traz o `failureCode`
+- 202: PENDING_REFERENCE (aceita, processamento pendente)
+
 Todo erro responde no formato `{ code, message }`. O `DomainErrorFilter` escolhe o status pelo `code`:
 
 - 400: `INVALID_PAYLOAD`, `INVALID_MONEY`
 - 404: `WALLET_NOT_FOUND`
-- 409: `WALLET_ALREADY_EXISTS`
+- 409: `WALLET_ALREADY_EXISTS`, `IDEMPOTENCY_CONFLICT`, `EXTERNAL_TRANSACTION_CONFLICT`
 - 500: qualquer código sem mapeamento; a mensagem interna vai para o log e não para a resposta
 
 O filtro para esses erros é registrado com o `APP_FILTER` no `AppModule`, dessa forma os testes tem acesso as mensagens de filtro.
