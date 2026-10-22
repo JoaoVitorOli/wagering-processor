@@ -29,9 +29,23 @@ Os valores são definidos com `p.decimal('string').precision(18).scale(2)` que n
 
 ## Garantias do banco
 
-As regras de dinheiro são validadas pelo domínio que o recusa primeiro com um erro claro e código estável para a resposta HTTP. O banco recusa sempre para qualquer caminho que chegue nele, seja um bug, um script, um caminho novo no código. O domínio decide e o banco garante.
+O domínio recusa primeiro, com erro claro e código estável. O banco recusa sempre, para qualquer caminho que chegue nele. O domínio decide e o banco garante.
 
-O banco consegue garantir a concorrência. Duas requisições podem passar juntas pelo código, mas o banco consegue verificar usando a constraint `unique`, então uma é gravada e a outra recebe a violação e vira um replay.
+Em requisições concorrentes iguais, quem desempata é a `unique`: uma grava,
+a outra recebe a violação. A concorrência do saldo é garantida pelo lock da
+carteira (ver Concorrência).
+
+Carteiras: saldo nunca negativo, versão a partir de 1, moeda ISO-4217 e uma carteira por jogador e moeda.
+
+Transações:
+
+- chave de idempotência única e id externo único por provedor;
+- valor positivo (LOSS aceita `0.00`);
+- REFUND e ROLLBACK exigem referência, OPENING e BET não têm, e ninguém referencia a si mesmo;
+- `failure_code` só em REJECTED/FAILED, `processed_at` só nos status finais;
+- uma reversão processada por tipo para a mesma referência (índice único parcial).
+
+O índice de reversão ignora `NULL`. Por isso o `reversal_resolved_check` obriga toda reversão processada a apontar para a transação revertida, sem ele, uma reversão com referência nula escaparia do índice e a mesma transação poderia ser revertida duas vezes.
 
 ## Migrações
 
