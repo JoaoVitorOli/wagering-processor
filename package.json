@@ -19,7 +19,7 @@
     "start": "bun run src/main.ts",
     "start:dev": "bun --watch src/main.ts",
     "start:debug": "bun --inspect --watch src/main.ts",
-    "lint": "oxlint src/ test/",
+    "lint": "oxlint --ignore-pattern 'src/infra/database/migrations/**' src/ test/",
     "test": "bun test",
     "test:watch": "bun test --watch",
     "test:cov": "bun test --coverage",
