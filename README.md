@@ -23,6 +23,8 @@ A aplicação sobe em `http://localhost:3000`. Para usar outra porta, altere `PO
 
 Se a porta 5432 já estiver em uso na sua máquina, altere `POSTGRES_PORT` no `.env` antes de subir o Docker.
 
+`LOCK_TIMEOUT_MS` (padrão `5000`) define quanto tempo uma requisição espera pelo lock de uma carteira antes de responder 503.
+
 Para desenvolver com recarga automática:
 
 ```bash
@@ -67,6 +69,7 @@ bun run test:integration
 
 - **Unidade** (`src/**/*.spec.ts`): não dependem de nada externo.
 - **Integração** (`test/integration`): usam o Postgres real do Docker Compose, que precisa estar de pé. Cada arquivo de teste cria um banco próprio com nome aleatório, aplica as migrações e apaga o banco no final.
+- **Concorrência** (`test/integration/concurrency`): sobem três instâncias da aplicação sobre o mesmo banco e disparam requisições em paralelo, incluindo o cenário de duas apostas de `80.00` numa carteira de `100.00`.
 
 `bun run test` roda as duas suítes.
 
