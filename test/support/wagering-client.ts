@@ -21,24 +21,46 @@ export async function createWallet(
   return (await response.json()) as WalletRef;
 }
 
-export function betFor(
+export interface TransactionBody {
+  providerId: string;
+  externalTransactionId: string;
+  playerId: string;
+  walletId: string;
+  roundId: string;
+  gameId: string;
+  kind: string;
+  money: { amount: string; currency: string };
+  referenceExternalTransactionId?: string;
+}
+
+export function transactionFor(
   wallet: WalletRef,
+  kind: string,
   amount: string,
-  externalTransactionId: string = randomUUID(),
-) {
+  overrides: Partial<TransactionBody> = {},
+): TransactionBody {
   return {
     providerId: 'provider-a',
-    externalTransactionId,
+    externalTransactionId: randomUUID(),
     playerId: wallet.playerId,
     walletId: wallet.id,
     roundId: 'round-1',
     gameId: 'fortune-chimp',
-    kind: 'BET',
+    kind,
     money: { amount, currency: 'BRL' },
+    ...overrides,
   };
 }
 
-export function submit(url: string, bet: ReturnType<typeof betFor>) {
+export function betFor(
+  wallet: WalletRef,
+  amount: string,
+  externalTransactionId: string = randomUUID(),
+): TransactionBody {
+  return transactionFor(wallet, 'BET', amount, { externalTransactionId });
+}
+
+export function submit(url: string, bet: TransactionBody) {
   return fetch(`${url}/wagering/transactions`, {
     method: 'POST',
     headers: {
