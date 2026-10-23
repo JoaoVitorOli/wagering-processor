@@ -14,6 +14,10 @@ import {
 import { createOrmConfig } from '../../src/infra/database/mikro-orm.config.js';
 import { SQS_CLIENT } from '../../src/infra/messaging/sqs-client.js';
 import {
+  OUTBOX_PUBLISHER_CONFIG,
+  type OutboxPublisherConfig,
+} from '../../src/interfaces/workers/outbox-publisher.worker.js';
+import {
   SQS_CONSUMER_CONFIG,
   type SqsConsumerConfig,
 } from '../../src/interfaces/sqs/wager-transactions.consumer.js';
@@ -33,6 +37,7 @@ export interface TestAppOptions {
   pendingReferenceWorker?: PendingReferenceWorkerConfig;
   sqsConsumer?: SqsConsumerConfig;
   sqsClient?: SQSClient;
+  outboxPublisher?: OutboxPublisherConfig;
 }
 
 export async function createTestApp(
@@ -64,6 +69,15 @@ export async function createTestApp(
         maxMessages: 10,
         retryBaseDelaySeconds: 1,
         retryMaxDelaySeconds: 1,
+      },
+    )
+    .overrideProvider(OUTBOX_PUBLISHER_CONFIG)
+    .useValue(
+      options.outboxPublisher ?? {
+        enabled: false,
+        queueUrl: '',
+        intervalMs: 1000,
+        batchSize: 50,
       },
     );
   if (options.sqsClient) {
