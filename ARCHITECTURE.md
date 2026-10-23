@@ -12,6 +12,7 @@ os trade-offs aceitos e as limitações conhecidas.
 - **MikroORM 7.2.5**: a opção preferencial do enunciado; transações explícitas e locks.
 - **decimal.js 10.6.0**: aritmética decimal exata dentro do `Money`.
 - **zod 4.6.5**: validação do formato das requisições.
+- **LocalStack 4.8.1**: SQS local, versão fixa (a latest exige token).
 
 Ferramentas de desenvolvimento: oxlint e Prettier.
 
@@ -87,6 +88,8 @@ O índice de reversão ignora `NULL`. Por isso o `reversal_resolved_check` obrig
 Outbox: `attempts >= 0` e índice parcial nos não publicados.
 
 Referências pendentes: `next_reference_attempt_at` existe só em PENDING_REFERENCE; `reference_attempts >= 0`.
+
+Inbox: chave primária `(consumer_name, message_id)`.
 
 ## Migrações
 
@@ -210,6 +213,16 @@ Eventos são gravados em `outbox_messages` na mesma transação da operação e 
 - replay: nenhum
 
 `aggregateId` é a carteira (ordem por carteira); `eventId` único permite deduplicar no consumidor.
+
+## SQS
+
+O consumidor usa o mesmo caso de uso do HTTP. A inbox `(consumer_name, message_id)` é gravada na mesma transação; mensagem repetida é confirmada sem reprocessar. O ack só acontece depois do commit.
+
+- Resultado de negócio (inclusive REJECTED): ack.
+- Erro permanente (payload inválido, carteira inexistente, conflito): DLQ na hora, com `errorCode`.
+- Erro transitório: volta para a fila com espera crescente; após 5 entregas, a fila move para a DLQ.
+
+Mensagens de um lote são processadas em ordem (grupo FIFO = carteira). No SIGTERM, a mensagem atual termina e o resto volta para a fila.
 
 ## Status e transições
 
