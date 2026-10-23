@@ -33,11 +33,11 @@ bun run start:dev
 
 ## API
 
-| Método | Rota                     | O que faz                                 |
-| ------ | ------------------------ | ----------------------------------------- |
-| `POST` | `/wallets`               | cria uma carteira                         |
-| `GET`  | `/wallets/:walletId`     | consulta uma carteira                     |
-| `POST` | `/wagering/transactions` | submete uma transação (por ora, só `BET`) |
+| Método | Rota                     | O que faz                                                            |
+| ------ | ------------------------ | -------------------------------------------------------------------- |
+| `POST` | `/wallets`               | cria uma carteira                                                    |
+| `GET`  | `/wallets/:walletId`     | consulta uma carteira                                                |
+| `POST` | `/wagering/transactions` | submete uma transação (`BET`, `WIN`, `LOSS`, `REFUND` ou `ROLLBACK`) |
 
 Criar uma carteira com saldo inicial:
 
@@ -57,6 +57,15 @@ curl -s -X POST localhost:3000/wagering/transactions \
 ```
 
 Repetir o mesmo comando devolve a mesma resposta com `"idempotentReplay": true`, sem debitar de novo.
+
+Reembolsar essa aposta (`REFUND` e `ROLLBACK` apontam para a transação original em `referenceExternalTransactionId`, com o mesmo valor):
+
+```bash
+curl -s -X POST localhost:3000/wagering/transactions \
+  -H 'content-type: application/json' \
+  -H 'Idempotency-Key: provider-a:transaction-124' \
+  -d '{"providerId":"provider-a","externalTransactionId":"transaction-124","playerId":"0192f28f-5dc0-7d58-bdb2-814ad6a0f4a1","walletId":"<walletId>","roundId":"round-987","gameId":"fortune-chimp","kind":"REFUND","money":{"amount":"25.00","currency":"BRL"},"referenceExternalTransactionId":"transaction-123"}'
+```
 
 Valores de dinheiro são sempre strings decimais com até duas casas (`"25.00"`). Os status HTTP, os códigos de erro e as regras de idempotência estão em [ARCHITECTURE.md](ARCHITECTURE.md).
 
