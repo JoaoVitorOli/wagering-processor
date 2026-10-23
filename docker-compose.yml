@@ -17,5 +17,23 @@ services:
       timeout: 3s
       retries: 30
 
+  localstack:
+    image: localstack/localstack:4.8.1
+    environment:
+      SERVICES: sqs
+    ports:
+      - '${LOCALSTACK_PORT:-4566}:4566'
+    volumes:
+      - ./docker/localstack/init-queues.sh:/etc/localstack/init/ready.d/init-queues.sh:ro
+    healthcheck:
+      test:
+        [
+          'CMD-SHELL',
+          'awslocal sqs get-queue-url --queue-name wagering-events.fifo',
+        ]
+      interval: 2s
+      timeout: 5s
+      retries: 30
+
 volumes:
   postgres-data:
