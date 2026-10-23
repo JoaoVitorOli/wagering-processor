@@ -86,6 +86,8 @@ O índice de reversão ignora `NULL`. Por isso o `reversal_resolved_check` obrig
 
 Outbox: `attempts >= 0` e índice parcial nos não publicados.
 
+Referências pendentes: `next_reference_attempt_at` existe só em PENDING_REFERENCE; `reference_attempts >= 0`.
+
 ## Migrações
 
 São geradas de forma automática a partir do script `migration:create`, para migrações escritas a mão é usado o `migration:create:blank`.
@@ -196,6 +198,8 @@ Cada transação tem `lock_timeout` (`LOCK_TIMEOUT_MS`, padrão 5 s). Se a carte
 
 Fazer o reenvio é seguro, pois o erro acontece antes do commit, quer dizer que houve o rollback e nada foi gravado. Caso o provedor reenvie, a idempotência aplica só a primeira.
 
+Workers em várias instâncias: cada um trava a carteira e relê a transação; se já não estiver pendente, pula.
+
 ## Outbox
 
 Eventos são gravados em `outbox_messages` na mesma transação da operação e publicados depois por um worker. Publicar antes do commit poderia anunciar um rollback; depois, perder o evento se o processo morresse.
@@ -254,6 +258,8 @@ A referência é procurada por `providerId` + `referenceExternalTransactionId` e
 
 Como a referência precisa ser da mesma carteira, ela também está protegida pelo lock da carteira.
 
+Pendentes são retentadas por um worker (a cada 1 s): espera de 1 s dobrando até 60 s, no máximo 10 tentativas (~5 min). Esgotou: REJECTED `REFERENCE_NOT_FOUND`. Retentativa sem sucesso não gera evento. O replay de uma pendente já resolvida devolve o estado atual.
+
 **Interpretação da regra 4.** O enunciado diz que uma referência não pode ser revertida duas vezes "pelo mesmo tipo". Lido ao pé da letra, uma BET aceitaria um REFUND e também um ROLLBACK, e o jogador receberia o valor de volta duas vezes. Crédito duplicado é falha eliminatória, então a regra adotada é mais rígida: cada transação pode ser revertida uma única vez, por qualquer tipo. O ROLLBACK de um REFUND continua permitido, porque reverte outra transação.
 
 **Limitação.** Depois que um REFUND é desfeito por um ROLLBACK, a BET original não pode ser reembolsada de novo: o REFUND continua contando como a reversão dela.
@@ -276,6 +282,7 @@ O `resultBalance` é sempre o saldo da carteira, na moeda dela, inclusive quando
 - `REFERENCE_NOT_PROCESSED` - A referência existe, mas foi recusada ou falhou. Não reenviar.
 - `REFERENCE_ALREADY_REVERSED` - A referência já foi revertida. Não reenviar.
 - `AMOUNT_MISMATCH` - O valor da reversão é diferente do valor da referência. Corrigir o payload.
+- `REFERENCE_NOT_FOUND` - A referência não chegou no prazo. Final; reenviar como nova transação.
 
 `INSUFFICIENT_FUNDS` e `REVERSAL_WOULD_OVERDRAW` são separados, como o enunciado pede: uma aposta sem saldo e uma reversão que estouraria o saldo são situações operacionais diferentes. Por isso a carteira expõe `canDebit` separado de `debit`: quem escolhe o código é o caso de uso.
 
