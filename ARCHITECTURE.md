@@ -3,6 +3,22 @@
 Este documento explica como o serviço funciona, as decisões técnicas tomadas,
 os trade-offs aceitos e as limitações conhecidas.
 
+## Visão geral
+
+O serviço recebe transações de apostas de provedores (BET, WIN, LOSS, REFUND e ROLLBACK) por HTTP ou pela fila SQS e aplica cada uma na carteira do jogador, exatamente uma vez.
+
+O caminho de uma transação, nos dois canais:
+
+1. trava a carteira no Postgres;
+2. grava a transação; se a chave de idempotência já existe, devolve a resposta original;
+3. aplica as regras e, se passar, muda o saldo e grava o lançamento no ledger;
+4. grava os eventos na outbox;
+5. faz o commit, e só então responde (HTTP) ou confirma a mensagem (SQS).
+
+Depois, um worker publica os eventos da outbox em outra fila, e outro worker retenta as transações que chegaram antes da referência.
+
+Tudo o que protege o dinheiro está no banco: lock da carteira, uniques de idempotência, CHECKs e ledger imutável. A fila e os workers podem entregar ou rodar de novo sem risco.
+
 ## Stack
 
 - **Bun 1.4.3**: runtime, gerenciador de pacotes e test runner (exigência do enunciado), sem etapa de build.
@@ -273,6 +289,10 @@ Eventos são gravados em `outbox_messages` na mesma transação da operação e 
 - PENDING_REFERENCE: `WagerTransactionPendingReference`
 - replay: nenhum
 
+A OPENING com saldo também gera os dois eventos, porque muda o saldo.
+
+Cada evento é uma classe com `eventType` e `version` fixos, serializada num envelope: `eventId`, `eventType`, `aggregateId`, `correlationId`, `causationId` (opcional), `occurredAt`, `version` e `data`. O dinheiro vai como string, igual na API. Uma mudança incompatível vira uma nova `version`.
+
 `aggregateId` é a carteira (ordem por carteira); `eventId` único permite deduplicar no consumidor.
 
 O publisher pega os pendentes com `FOR UPDATE SKIP LOCKED` (vários publishers não pegam o mesmo evento), publica e marca na mesma transação. Se morrer antes do commit, o evento é publicado de novo: a duplicata é segura pelo `eventId`. Falha ao publicar: nova tentativa de 1 s dobrando até 5 min, sem limite. Só sai o evento mais antigo pendente de cada carteira, para manter a ordem.
@@ -286,6 +306,14 @@ O consumidor usa o mesmo caso de uso do HTTP. A inbox `(consumer_name, message_i
 - Erro transitório: volta para a fila com espera crescente; após 5 entregas, a fila move para a DLQ.
 
 Mensagens de um lote são processadas em ordem (grupo FIFO = carteira). No SIGTERM, a mensagem atual termina e o resto volta para a fila.
+
+O script `docker/localstack/init-queues.sh` cria as filas na subida do LocalStack, todas FIFO e com `ContentBasedDeduplication=false` (a deduplicação é por id explícito, não pelo conteúdo):
+
+- `wager-transactions.fifo`: entrada. Visibilidade de 30 s e `RedrivePolicy` para a DLQ depois de 5 entregas.
+- `wager-transactions-dlq.fifo`: mensagens que não podem ser processadas, com o `errorCode` como atributo.
+- `wagering-events.fifo`: saída dos eventos da outbox. `MessageGroupId` = carteira e `MessageDeduplicationId` = `eventId`. Não tem DLQ, porque quem guarda o evento até ser publicado é a outbox.
+
+A FIFO é uma otimização. A garantia de não aplicar duas vezes está no banco (inbox e idempotência), então tudo funcionaria com uma fila padrão.
 
 ## API
 
@@ -310,6 +338,24 @@ Os erros do banco passam pelo `DatabaseErrorFilter`: os transitórios viram 503 
 
 Os filtros são registrados com `APP_FILTER` no `AppModule`, e não no `main.ts`: os testes sobem o `AppModule` sem executar o `main.ts`, e assim os filtros valem nos dois.
 
+## Extrato e reconciliação
+
+O extrato (`GET /wallets/:walletId/ledger`) vem do mais novo para o mais antigo. O cursor é a posição (`sequence`) do último item da página, em base64url; o cliente não deve interpretar. A próxima página pega `sequence` menor que o cursor. Como o ledger só cresce, lançamentos novos não mudam as páginas seguintes. `limit` padrão 50, máximo 100; cursor inválido responde 400 `INVALID_CURSOR`.
+
+O `sequence` é um `bigserial` com índice `(wallet_id, sequence)`, para a ordem ser estável mesmo com lançamentos no mesmo milissegundo.
+
+A reconciliação (`POST /wallets/:walletId/reconciliation`) soma créditos e débitos do ledger no banco e compara com o saldo gravado. A carteira fica travada com `FOR SHARE` durante a conta, para uma aposta concorrente não criar uma divergência falsa. Ela não corrige nada: responde `consistent: false` com a diferença, registra um log de aviso e incrementa a métrica de divergências. Corrigir automaticamente esconderia o bug que causou a diferença.
+
+## Cenários de falha
+
+- **Processo morre antes do commit:** o Postgres faz rollback e nada fica gravado. Pelo HTTP, o provedor reenvia e a operação é aplicada uma vez; pela fila, a mensagem volta depois da visibilidade. Teste: `processes.spec.ts` (reinício no meio do trabalho).
+- **Processo morre depois do commit e antes do ack:** a mensagem volta, a inbox já tem o `messageId` e ela é confirmada sem tocar na carteira. Teste: `processes.spec.ts` (failpoint) e `wager-transactions-consumer.spec.ts`.
+- **Processo morre depois do commit e antes da resposta HTTP:** o reenvio cai no replay e devolve a resposta original.
+- **Processo morre entre publicar o evento e marcar como publicado:** o evento é publicado de novo, com o mesmo `eventId`. Teste: `outbox-publisher.spec.ts`.
+- **SQS fora:** o publisher reagenda os eventos e a outbox guarda tudo; o consumidor só volta a ler quando o SQS volta; `/health/ready` responde 503. Teste: `observability.spec.ts` e `outbox-publisher.spec.ts`.
+- **Postgres fora ou carteira travada demais:** a requisição responde 503 com `Retry-After`, e a mensagem da fila volta com espera crescente até ir para a DLQ. Teste: `bet-concurrency.spec.ts` e `wager-transactions-consumer.spec.ts` (lock).
+- **Mensagem que nunca vai dar certo:** DLQ na hora, com `errorCode`. Teste: `wager-transactions-consumer.spec.ts`.
+
 ## Testes de integração
 
 Usam o PostgreSQL real, sem mock. Cada arquivo de teste cria um banco aleatório (`wagering_test_` + UUID), aplica as migrações e apaga o banco no final. Isso em vez de limpar tabelas porque:
@@ -332,7 +378,7 @@ Todo arquivo de teste termina conferindo que cada carteira tem saldo igual à so
 
 ## Observabilidade
 
-Logs em JSON (logger do Nest), com `correlationId`, `messageId`, `transactionId`, `walletId` e `providerId`; sem valores nem payloads. O `correlationId` vem do header `x-correlation-id` (ou é gerado), volta na resposta e vai para os eventos; na fila é o `messageId`.
+Logs em JSON (logger do Nest), com `correlationId`, `messageId`, `transactionId`, `walletId` e `providerId`; sem valores nem payloads. A única exceção é a diferença no aviso de divergência da reconciliação, que é o que precisa ser investigado. O `correlationId` vem do header `x-correlation-id` (ou é gerado), volta na resposta e vai para os eventos; na fila é o `messageId`.
 
 Métricas em `/metrics`: transações por status, duplicatas, retries, DLQ, conflitos de lock, outbox lag, latência e divergências de reconciliação.
 
