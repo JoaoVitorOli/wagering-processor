@@ -12,6 +12,11 @@ export interface WalletRepository {
   update(wallet: Wallet, expectedVersion: number): Promise<void>;
 }
 
+export interface DueTransaction {
+  transactionId: string;
+  walletId: string;
+}
+
 export interface WagerTransactionRepository {
   add(transaction: WagerTransaction): Promise<void>;
   addIfAbsent(transaction: WagerTransaction): Promise<boolean>;
@@ -21,6 +26,11 @@ export interface WagerTransactionRepository {
     externalTransactionId: string,
   ): Promise<WagerTransaction | undefined>;
   isReversed(transactionId: string): Promise<boolean>;
+  findDuePendingReferences(now: Date, limit: number): Promise<DueTransaction[]>;
+  findDuePendingReferenceForUpdate(
+    transactionId: string,
+    now: Date,
+  ): Promise<WagerTransaction | undefined>;
   update(transaction: WagerTransaction): Promise<void>;
 }
 
