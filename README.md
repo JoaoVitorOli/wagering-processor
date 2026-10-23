@@ -86,8 +86,21 @@ bun run test:integration
 - **Integração** (`test/integration`): usam o Postgres real do Docker Compose, que precisa estar de pé. Cada arquivo de teste cria um banco próprio com nome aleatório, aplica as migrações e apaga o banco no final.
 - **Concorrência** (`test/integration/concurrency`): sobem três instâncias da aplicação sobre o mesmo banco e disparam requisições em paralelo, incluindo o cenário de duas apostas de `80.00` numa carteira de `100.00`.
 - **SQS** (`test/integration/sqs`): usam o LocalStack do Docker Compose, que também precisa estar de pé; cada teste cria filas próprias.
+- **Processos** (`test/integration/processes`): sobem processos reais da aplicação, matam e reiniciam no meio do trabalho.
 
 `bun run test` roda as duas suítes.
+
+Onde cada exigência de teste do enunciado é provada:
+
+| Exigência                                           | Teste                                     |
+| --------------------------------------------------- | ----------------------------------------- |
+| 50 cópias, 80/80, carteiras em paralelo             | `concurrency/bet-concurrency.spec.ts`     |
+| ≥ 3 processos, morte entre commit e ack, reinício   | `processes/processes.spec.ts`             |
+| inbox, redelivery, retry e DLQ                      | `sqs/wager-transactions-consumer.spec.ts` |
+| publishers concorrentes sobre a outbox              | `outbox-publisher.spec.ts`                |
+| atomicidade entre carteira, ledger e outbox         | `outbox.spec.ts`                          |
+| REFUND ou ROLLBACK antes da referência              | `pending-references.spec.ts`              |
+| migrações e constraints                             | `database.spec.ts`, `schema.spec.ts`      |
 
 ## Comandos
 
