@@ -21,6 +21,15 @@ export class MikroOrmWagerTransactionRepository implements WagerTransactionRepos
     );
   }
 
+  async findById(id: string): Promise<WagerTransaction | undefined> {
+    const record = await this.em.findOne(
+      WagerTransactionSchema,
+      { id },
+      { populate: ['wallet'] },
+    );
+    return record ? WagerTransactionMapper.toDomain(record) : undefined;
+  }
+
   async addIfAbsent(transaction: WagerTransaction): Promise<boolean> {
     const result = await this.em
       .createQueryBuilder(WagerTransactionSchema)

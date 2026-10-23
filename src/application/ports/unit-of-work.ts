@@ -9,6 +9,7 @@ export interface WalletRepository {
   add(wallet: Wallet): Promise<void>;
   findById(id: string): Promise<Wallet | undefined>;
   findByIdForUpdate(id: string): Promise<Wallet | undefined>;
+  findByIdForShare(id: string): Promise<Wallet | undefined>;
   update(wallet: Wallet, expectedVersion: number): Promise<void>;
 }
 
@@ -19,6 +20,7 @@ export interface DueTransaction {
 
 export interface WagerTransactionRepository {
   add(transaction: WagerTransaction): Promise<void>;
+  findById(id: string): Promise<WagerTransaction | undefined>;
   addIfAbsent(transaction: WagerTransaction): Promise<boolean>;
   findByIdempotencyKey(key: string): Promise<WagerTransaction | undefined>;
   findByExternalId(
@@ -34,8 +36,25 @@ export interface WagerTransactionRepository {
   update(transaction: WagerTransaction): Promise<void>;
 }
 
+export interface LedgerPageItem {
+  entry: WalletLedgerEntry;
+  sequence: string;
+}
+
+export interface LedgerTotals {
+  credits: string;
+  debits: string;
+  entries: number;
+}
+
 export interface LedgerRepository {
   add(entry: WalletLedgerEntry): Promise<void>;
+  findPage(
+    walletId: string,
+    beforeSequence: string | undefined,
+    limit: number,
+  ): Promise<LedgerPageItem[]>;
+  totals(walletId: string): Promise<LedgerTotals>;
 }
 
 export interface OutboxRepository {

@@ -45,6 +45,15 @@ export class MikroOrmWalletRepository implements WalletRepository {
     return record ? WalletMapper.toDomain(record) : undefined;
   }
 
+  async findByIdForShare(id: string): Promise<Wallet | undefined> {
+    const record = await this.em.findOne(
+      WalletSchema,
+      { id },
+      { lockMode: LockMode.PESSIMISTIC_READ },
+    );
+    return record ? WalletMapper.toDomain(record) : undefined;
+  }
+
   async update(wallet: Wallet, expectedVersion: number): Promise<void> {
     const updated = await this.em.nativeUpdate(
       WalletSchema,
