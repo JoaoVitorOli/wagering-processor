@@ -1,6 +1,7 @@
 import type { WagerTransaction } from '../../domain/wagering/wager-transaction.js';
 import type { Wallet } from '../../domain/wallet/wallet.js';
 import type { WalletLedgerEntry } from '../../domain/wallet/wallet-ledger-entry.js';
+import type { InboxMessage } from '../inbox/inbox-message.js';
 import type { OutboxMessage } from '../outbox/outbox-message.js';
 
 export const UNIT_OF_WORK = Symbol('UnitOfWork');
@@ -57,6 +58,15 @@ export interface LedgerRepository {
   totals(walletId: string): Promise<LedgerTotals>;
 }
 
+export interface InboxRepository {
+  addIfAbsent(message: InboxMessage): Promise<boolean>;
+  find(
+    consumerName: string,
+    messageId: string,
+  ): Promise<InboxMessage | undefined>;
+  markProcessed(message: InboxMessage): Promise<void>;
+}
+
 export interface OutboxRepository {
   add(messages: OutboxMessage[]): Promise<void>;
 }
@@ -66,6 +76,7 @@ export interface Repositories {
   transactions: WagerTransactionRepository;
   ledger: LedgerRepository;
   outbox: OutboxRepository;
+  inbox: InboxRepository;
 }
 
 export interface UnitOfWork {

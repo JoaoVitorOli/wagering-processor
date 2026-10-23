@@ -1,5 +1,6 @@
 import { Migrator } from '@mikro-orm/migrations';
 import { defineConfig } from '@mikro-orm/postgresql';
+import { InboxMessageSchema } from './entities/inbox-message.entity.js';
 import { OutboxMessageSchema } from './entities/outbox-message.entity.js';
 import { WagerTransactionSchema } from './entities/wager-transaction.entity.js';
 import { WalletLedgerEntrySchema } from './entities/wallet-ledger-entry.entity.js';
@@ -17,6 +18,7 @@ export function createOrmConfig(dbName = process.env.POSTGRES_DB) {
       WagerTransactionSchema,
       WalletLedgerEntrySchema,
       OutboxMessageSchema,
+      InboxMessageSchema,
     ],
     extensions: [Migrator],
     migrations: {
