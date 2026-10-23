@@ -1,4 +1,4 @@
-import type { OutboxMessage } from '../../../application/outbox/outbox-message.js';
+import { OutboxMessage } from '../../../application/outbox/outbox-message.js';
 import type { OutboxMessageRecord } from '../entities/outbox-message.entity.js';
 
 export const OutboxMessageMapper = {
@@ -13,5 +13,18 @@ export const OutboxMessageMapper = {
       nextAttemptAt: message.nextAttemptAt,
       publishedAt: message.publishedAt ?? null,
     };
+  },
+
+  toDomain(record: OutboxMessageRecord): OutboxMessage {
+    return OutboxMessage.rehydrate({
+      id: record.id,
+      aggregateId: record.aggregateId,
+      eventType: record.eventType,
+      payload: record.payload,
+      occurredAt: record.occurredAt,
+      attempts: record.attempts,
+      nextAttemptAt: record.nextAttemptAt,
+      publishedAt: record.publishedAt ?? undefined,
+    });
   },
 };
