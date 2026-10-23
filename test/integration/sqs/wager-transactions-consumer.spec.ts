@@ -138,7 +138,7 @@ describe('wager transactions consumer', () => {
   });
 
   it('applies a message delivered twice only once', async () => {
-    await withConsumer({}, async ({ queues }) => {
+    await withConsumer({}, async ({ queues, app }) => {
       const wallet = await createWallet(api.url, '100.00');
       const body = message(wallet);
 
@@ -153,6 +153,9 @@ describe('wager transactions consumer', () => {
         debits: '1',
       });
       expect(await inboxOf(body.messageId)).toHaveLength(1);
+      expect(await (await fetch(`${app.url}/metrics`)).text()).toContain(
+        'duplicate_requests_total{source="sqs"} 1',
+      );
     });
   });
 
@@ -225,7 +228,7 @@ describe('wager transactions consumer', () => {
         'WALLET_NOT_FOUND',
       ],
     ])('moves %s to the DLQ right away', async (_, build, code) => {
-      await withConsumer({}, async ({ queues }) => {
+      await withConsumer({}, async ({ queues, app }) => {
         const wallet = await createWallet(api.url, '100.00');
 
         await sendMessage(sqs, queues.queueUrl, build(wallet), wallet.id);
@@ -240,6 +243,9 @@ describe('wager transactions consumer', () => {
           async () => (await queueDepth(sqs, queues.queueUrl)) === 0,
         );
         expect((await balanceOf(wallet)).balance).toBe('100.00');
+        expect(await (await fetch(`${app.url}/metrics`)).text()).toContain(
+          `dead_letter_messages_total{reason="${code}"} 1`,
+        );
       });
     });
 
