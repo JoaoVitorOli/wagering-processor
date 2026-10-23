@@ -13,3 +13,10 @@ export function isTransientDatabaseError(error: unknown): boolean {
     (error instanceof DriverException && error.code === LOCK_NOT_AVAILABLE)
   );
 }
+
+export function isLockConflict(error: unknown): boolean {
+  return (
+    error instanceof DeadlockException ||
+    (error instanceof DriverException && error.code === LOCK_NOT_AVAILABLE)
+  );
+}
