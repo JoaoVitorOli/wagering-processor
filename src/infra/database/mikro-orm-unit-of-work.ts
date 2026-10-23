@@ -4,6 +4,7 @@ import type {
   UnitOfWork,
 } from '../../application/ports/unit-of-work.js';
 import { MikroOrmLedgerRepository } from './repositories/mikro-orm-ledger.repository.js';
+import { MikroOrmOutboxRepository } from './repositories/mikro-orm-outbox.repository.js';
 import { MikroOrmWagerTransactionRepository } from './repositories/mikro-orm-wager-transaction.repository.js';
 import { MikroOrmWalletRepository } from './repositories/mikro-orm-wallet.repository.js';
 
@@ -20,6 +21,7 @@ export class MikroOrmUnitOfWork implements UnitOfWork {
         wallets: new MikroOrmWalletRepository(em),
         transactions: new MikroOrmWagerTransactionRepository(em),
         ledger: new MikroOrmLedgerRepository(em),
+        outbox: new MikroOrmOutboxRepository(em),
       });
     });
   }
