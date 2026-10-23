@@ -214,6 +214,8 @@ Eventos são gravados em `outbox_messages` na mesma transação da operação e 
 
 `aggregateId` é a carteira (ordem por carteira); `eventId` único permite deduplicar no consumidor.
 
+O publisher pega os pendentes com `FOR UPDATE SKIP LOCKED` (vários publishers não pegam o mesmo evento), publica e marca na mesma transação. Se morrer antes do commit, o evento é publicado de novo: a duplicata é segura pelo `eventId`. Falha ao publicar: nova tentativa de 1 s dobrando até 5 min, sem limite. Só sai o evento mais antigo pendente de cada carteira, para manter a ordem.
+
 ## SQS
 
 O consumidor usa o mesmo caso de uso do HTTP. A inbox `(consumer_name, message_id)` é gravada na mesma transação; mensagem repetida é confirmada sem reprocessar. O ack só acontece depois do commit.
