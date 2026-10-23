@@ -8,5 +8,6 @@ export enum FailureCode {
   ReferenceNotProcessed = 'REFERENCE_NOT_PROCESSED',
   ReferenceAlreadyReversed = 'REFERENCE_ALREADY_REVERSED',
   AmountMismatch = 'AMOUNT_MISMATCH',
+  ReferenceNotFound = 'REFERENCE_NOT_FOUND',
   ProcessingFailed = 'PROCESSING_FAILED',
 }

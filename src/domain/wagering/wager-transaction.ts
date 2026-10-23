@@ -100,6 +100,8 @@ export interface WagerTransactionState extends CreateWagerTransactionProps {
   failureCode?: FailureCode;
   resultBalance?: Money;
   processedAt?: Date;
+  referenceAttempts?: number;
+  nextReferenceAttemptAt?: Date;
 }
 
 export class WagerTransaction {
@@ -121,6 +123,8 @@ export class WagerTransaction {
   private _failureCode: FailureCode | undefined;
   private _resultBalance: Money | undefined;
   private _processedAt: Date | undefined;
+  private _referenceAttempts: number;
+  private _nextReferenceAttemptAt: Date | undefined;
 
   private constructor(state: WagerTransactionState) {
     this.id = state.id;
@@ -141,6 +145,8 @@ export class WagerTransaction {
     this._failureCode = state.failureCode;
     this._resultBalance = state.resultBalance;
     this._processedAt = state.processedAt;
+    this._referenceAttempts = state.referenceAttempts ?? 0;
+    this._nextReferenceAttemptAt = state.nextReferenceAttemptAt;
   }
 
   static create(props: CreateWagerTransactionProps): WagerTransaction {
@@ -202,6 +208,14 @@ export class WagerTransaction {
     return this._processedAt;
   }
 
+  get referenceAttempts(): number {
+    return this._referenceAttempts;
+  }
+
+  get nextReferenceAttemptAt(): Date | undefined {
+    return this._nextReferenceAttemptAt;
+  }
+
   markProcessed(props: {
     resultBalance: Money;
     referenceTransactionId?: string;
@@ -211,11 +225,26 @@ export class WagerTransaction {
     this._referenceTransactionId = props.referenceTransactionId;
     this._resultBalance = props.resultBalance;
     this._processedAt = props.at;
+    this._nextReferenceAttemptAt = undefined;
   }
 
-  markPendingReference(props: { resultBalance: Money }): void {
+  markPendingReference(props: {
+    resultBalance: Money;
+    nextAttemptAt: Date;
+  }): void {
     this.transitionTo(WagerTransactionStatus.PendingReference);
     this._resultBalance = props.resultBalance;
+    this._nextReferenceAttemptAt = props.nextAttemptAt;
+  }
+
+  scheduleReferenceRetry(props: { nextAttemptAt: Date }): void {
+    if (this._status !== WagerTransactionStatus.PendingReference) {
+      throw new InvalidTransactionStateError(
+        `Transaction ${this.id} is ${this._status}, not waiting for its reference`,
+      );
+    }
+    this._referenceAttempts += 1;
+    this._nextReferenceAttemptAt = props.nextAttemptAt;
   }
 
   reject(props: { code: FailureCode; resultBalance: Money; at: Date }): void {
@@ -223,6 +252,7 @@ export class WagerTransaction {
     this._failureCode = props.code;
     this._resultBalance = props.resultBalance;
     this._processedAt = props.at;
+    this._nextReferenceAttemptAt = undefined;
   }
 
   fail(props: { code: FailureCode; at: Date }): void {

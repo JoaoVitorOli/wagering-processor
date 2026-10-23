@@ -179,7 +179,10 @@ describe('WagerTransaction', () => {
         }),
       );
 
-      refund.markPendingReference({ resultBalance: brl('75.00') });
+      refund.markPendingReference({
+        resultBalance: brl('75.00'),
+        nextAttemptAt: at,
+      });
       expect(refund.status).toBe(WagerTransactionStatus.PendingReference);
       expect(refund.isTerminal()).toBe(false);
 
@@ -196,8 +199,66 @@ describe('WagerTransaction', () => {
       const transaction = withStatus(WagerTransactionStatus.PendingReference);
 
       expect(() =>
-        transaction.markPendingReference({ resultBalance: brl('75.00') }),
+        transaction.markPendingReference({
+          resultBalance: brl('75.00'),
+          nextAttemptAt: at,
+        }),
       ).toThrow(InvalidTransactionStateError);
+    });
+
+    describe('reference retries', () => {
+      const later = new Date('2026-10-21T12:00:04Z');
+      const pendingRefund = () => {
+        const refund = WagerTransaction.create(
+          props({
+            kind: WagerTransactionKind.Refund,
+            referenceExternalTransactionId: 'external-0',
+          }),
+        );
+        refund.markPendingReference({
+          resultBalance: brl('75.00'),
+          nextAttemptAt: at,
+        });
+        return refund;
+      };
+
+      it('starts with no attempts and the first retry scheduled', () => {
+        const refund = pendingRefund();
+
+        expect(refund.referenceAttempts).toBe(0);
+        expect(refund.nextReferenceAttemptAt).toEqual(at);
+      });
+
+      it('counts each retry without leaving PENDING_REFERENCE', () => {
+        const refund = pendingRefund();
+
+        refund.scheduleReferenceRetry({ nextAttemptAt: later });
+
+        expect(refund.status).toBe(WagerTransactionStatus.PendingReference);
+        expect(refund.referenceAttempts).toBe(1);
+        expect(refund.nextReferenceAttemptAt).toEqual(later);
+      });
+
+      it('clears the schedule once processed or rejected', () => {
+        const processed = pendingRefund();
+        const rejected = pendingRefund();
+
+        processed.markProcessed({ resultBalance: brl('100.00'), at });
+        rejected.reject({
+          code: FailureCode.ReferenceNotFound,
+          resultBalance: brl('75.00'),
+          at,
+        });
+
+        expect(processed.nextReferenceAttemptAt).toBeUndefined();
+        expect(rejected.nextReferenceAttemptAt).toBeUndefined();
+      });
+
+      it('refuses a retry outside PENDING_REFERENCE', () => {
+        expect(() =>
+          bet().scheduleReferenceRetry({ nextAttemptAt: later }),
+        ).toThrow(InvalidTransactionStateError);
+      });
     });
 
     it.each([
@@ -208,7 +269,11 @@ describe('WagerTransaction', () => {
       const transaction = withStatus(status);
       const attempts = [
         () => transaction.markProcessed({ resultBalance: brl('1.00'), at }),
-        () => transaction.markPendingReference({ resultBalance: brl('1.00') }),
+        () =>
+          transaction.markPendingReference({
+            resultBalance: brl('1.00'),
+            nextAttemptAt: at,
+          }),
         () =>
           transaction.reject({
             code: FailureCode.InsufficientFunds,
