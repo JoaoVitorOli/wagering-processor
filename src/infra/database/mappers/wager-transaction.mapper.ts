@@ -26,6 +26,8 @@ export const WagerTransactionMapper = {
       resultBalance: transaction.resultBalance?.toJSON().amount ?? null,
       createdAt: transaction.createdAt,
       processedAt: transaction.processedAt ?? null,
+      referenceAttempts: transaction.referenceAttempts,
+      nextReferenceAttemptAt: transaction.nextReferenceAttemptAt ?? null,
     };
   },
   toDomain(record: WagerTransactionRecord): WagerTransaction {
@@ -54,6 +56,8 @@ export const WagerTransactionMapper = {
         : undefined,
       createdAt: record.createdAt,
       processedAt: record.processedAt ?? undefined,
+      referenceAttempts: record.referenceAttempts,
+      nextReferenceAttemptAt: record.nextReferenceAttemptAt ?? undefined,
     });
   },
 };
