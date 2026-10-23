@@ -303,12 +303,43 @@ describe('database schema', () => {
             status,
             failureCode: status === 'REJECTED' ? 'INSUFFICIENT_FUNDS' : null,
             processedAt: status === 'PENDING_REFERENCE' ? null : new Date(),
+            nextReferenceAttemptAt:
+              status === 'PENDING_REFERENCE' ? new Date() : null,
           }),
         ).rejects.toMatchObject({
           constraint: 'wager_transactions_result_balance_required_check',
         });
       },
     );
+
+    it('rejects PENDING_REFERENCE without the next attempt scheduled', async () => {
+      await expect(
+        insertTransaction({
+          kind: 'REFUND',
+          referenceExternalTransactionId: 'bet-1',
+          status: 'PENDING_REFERENCE',
+          resultBalance: '100.00',
+        }),
+      ).rejects.toMatchObject({
+        constraint: 'wager_transactions_next_reference_attempt_check',
+      });
+    });
+
+    it('rejects a next attempt on a transaction that is not waiting', async () => {
+      await expect(
+        insertTransaction({ nextReferenceAttemptAt: new Date() }),
+      ).rejects.toMatchObject({
+        constraint: 'wager_transactions_next_reference_attempt_check',
+      });
+    });
+
+    it('rejects negative reference attempts', async () => {
+      await expect(
+        insertTransaction({ referenceAttempts: -1 }),
+      ).rejects.toMatchObject({
+        constraint: 'wager_transactions_reference_attempts_check',
+      });
+    });
 
     it('rejects a processed reversal without the resolved reference', async () => {
       await expect(
