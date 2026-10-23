@@ -228,6 +228,18 @@ O consumidor usa o mesmo caso de uso do HTTP. A inbox `(consumer_name, message_i
 
 Mensagens de um lote são processadas em ordem (grupo FIFO = carteira). No SIGTERM, a mensagem atual termina e o resto volta para a fila.
 
+## Observabilidade
+
+Logs em JSON (logger do Nest), com `correlationId`, `messageId`, `transactionId`, `walletId` e `providerId`; sem valores nem payloads. O `correlationId` vem do header `x-correlation-id` (ou é gerado), volta na resposta e vai para os eventos; na fila é o `messageId`.
+
+Métricas em `/metrics`: transações por status, duplicatas, retries, DLQ, conflitos de lock, outbox lag, latência e divergências de reconciliação.
+
+`/health/live` responde se o processo está de pé; `/health/ready` testa Postgres e SQS e responde 503 se algum estiver fora.
+
+## Autenticação
+
+Não implementada, como o enunciado permite. O desenho seria um IdP externo (ex.: Keycloak) com client credentials por provedor, conferindo que o `providerId` do token é o do corpo. O ponto de extensão é o `ProviderAuthGuard`, hoje sem efeito, aplicado às rotas de provedor.
+
 ## Status e transições
 
 ```
