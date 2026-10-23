@@ -119,6 +119,8 @@ Os testes de referência cobrem cada tipo, cada código de falha, a regra de uma
 
 Atomicidade: se a outbox falha, carteira, transação e ledger ficam intactos.
 
+Todo arquivo de teste termina conferindo que cada carteira tem saldo igual à soma do ledger. Os testes de processos sobem três `bun src/main.ts` reais no mesmo banco e filas, matam um processo entre o commit e o ack (failpoint `FAILPOINTS`, inerte sem a variável) e reiniciam no meio do trabalho, conferindo a consistência final. As migrações são revertidas e reaplicadas.
+
 ## Erros globais de regras de negócio
 
 O `src/domain/shared/domain-error.ts` é uma classe abstrata que é a base de todos os erros de regra de negócio. Cada erro possui um código próprio que a camada HTTP pode usar para escolher o status da resposta sem depender do texto da mensagem.
