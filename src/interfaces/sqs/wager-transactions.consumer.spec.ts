@@ -6,6 +6,7 @@ import {
 } from '@aws-sdk/client-sqs';
 import { describe, expect, it } from 'bun:test';
 import type { ConsumeWagerMessageUseCase } from '../../application/wagering/consume-wager-message.use-case.js';
+import { Metrics } from '../../infra/observability/metrics.js';
 import {
   type SqsConsumerConfig,
   WagerTransactionsConsumer,
@@ -62,7 +63,12 @@ describe('WagerTransactionsConsumer shutdown', () => {
         return { duplicate: true };
       },
     } as unknown as ConsumeWagerMessageUseCase;
-    consumer = new WagerTransactionsConsumer(sqs, useCase, config);
+    consumer = new WagerTransactionsConsumer(
+      sqs,
+      useCase,
+      config,
+      new Metrics(async () => ({ pending: 0, oldestAgeSeconds: 0 })),
+    );
 
     await consumer.processBatch([
       messageWith('m1'),

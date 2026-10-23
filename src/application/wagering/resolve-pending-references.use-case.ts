@@ -1,5 +1,8 @@
 import { FailureCode } from '../../domain/wagering/failure-code.js';
-import { WagerTransactionStatus } from '../../domain/wagering/wager-transaction.js';
+import {
+  type WagerTransactionKind,
+  WagerTransactionStatus,
+} from '../../domain/wagering/wager-transaction.js';
 import type { Clock } from '../ports/clock.js';
 import type { IdGenerator } from '../ports/id-generator.js';
 import type { DueTransaction, UnitOfWork } from '../ports/unit-of-work.js';
@@ -9,8 +12,15 @@ import {
 } from './reference-retry-policy.js';
 import { TransactionProcessor } from './transaction-processor.js';
 
+export interface ResolvedTransaction {
+  kind: WagerTransactionKind;
+  status: WagerTransactionStatus;
+}
+
 export interface ResolvePendingReferencesResult {
   attempted: number;
+  resolved: ResolvedTransaction[];
+  rescheduled: number;
   failures: unknown[];
 }
 
@@ -32,18 +42,28 @@ export class ResolvePendingReferencesUseCase {
       transactions.findDuePendingReferences(now, limit),
     );
 
+    const resolved: ResolvedTransaction[] = [];
     const failures: unknown[] = [];
+    let rescheduled = 0;
     for (const item of due) {
       try {
-        await this.retry(item, now);
+        const outcome = await this.retry(item, now);
+        if (outcome === 'rescheduled') {
+          rescheduled++;
+        } else if (outcome) {
+          resolved.push(outcome);
+        }
       } catch (error) {
         failures.push(error);
       }
     }
-    return { attempted: due.length, failures };
+    return { attempted: due.length, resolved, rescheduled, failures };
   }
 
-  private retry({ transactionId, walletId }: DueTransaction, now: Date) {
+  private retry(
+    { transactionId, walletId }: DueTransaction,
+    now: Date,
+  ): Promise<ResolvedTransaction | 'rescheduled' | undefined> {
     return this.unitOfWork.run(async (repositories) => {
       const wallet = await repositories.wallets.findByIdForUpdate(walletId);
       const transaction = wallet
@@ -53,7 +73,7 @@ export class ResolvePendingReferencesUseCase {
           )
         : undefined;
       if (!wallet || !transaction) {
-        return;
+        return undefined;
       }
 
       const outcome = await this.processor.process(
@@ -81,15 +101,17 @@ export class ResolvePendingReferencesUseCase {
       }
 
       await repositories.transactions.update(transaction);
-      if (transaction.status !== WagerTransactionStatus.PendingReference) {
-        await repositories.outbox.add(
-          this.processor.events(
-            transaction,
-            wallet,
-            outcome.pending ? undefined : outcome.entry,
-          ),
-        );
+      if (transaction.status === WagerTransactionStatus.PendingReference) {
+        return 'rescheduled';
       }
+      await repositories.outbox.add(
+        this.processor.events(
+          transaction,
+          wallet,
+          outcome.pending ? undefined : outcome.entry,
+        ),
+      );
+      return { kind: transaction.kind, status: transaction.status };
     });
   }
 }

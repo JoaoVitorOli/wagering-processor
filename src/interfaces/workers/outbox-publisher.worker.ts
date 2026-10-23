@@ -6,6 +6,7 @@ import {
   type OnApplicationShutdown,
 } from '@nestjs/common';
 import { PublishOutboxUseCase } from '../../application/outbox/publish-outbox.use-case.js';
+import { METRICS, type Metrics } from '../../infra/observability/metrics.js';
 
 export const OUTBOX_PUBLISHER_CONFIG = Symbol('OutboxPublisherConfig');
 
@@ -31,6 +32,7 @@ export class OutboxPublisherWorker
     private readonly publishOutbox: PublishOutboxUseCase,
     @Inject(OUTBOX_PUBLISHER_CONFIG)
     private readonly config: OutboxPublisherConfig,
+    @Inject(METRICS) private readonly metrics: Metrics,
   ) {}
 
   onApplicationBootstrap(): void {
@@ -59,6 +61,10 @@ export class OutboxPublisherWorker
     for (let round = 0; round < MAX_ROUNDS_PER_TICK; round++) {
       const { published, failures } = await this.publishOutbox.execute(
         this.config.batchSize,
+      );
+      this.metrics.retries.inc(
+        { component: 'outbox_publisher' },
+        failures.length,
       );
       for (const failure of failures) {
         this.logger.warn(failure);

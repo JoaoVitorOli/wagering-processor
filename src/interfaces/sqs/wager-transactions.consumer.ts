@@ -16,8 +16,12 @@ import {
 import { ConsumeWagerMessageUseCase } from '../../application/wagering/consume-wager-message.use-case.js';
 import { DomainError } from '../../domain/shared/domain-error.js';
 import { SQS_CLIENT } from '../../infra/messaging/sqs-client.js';
-import { isTransientDatabaseError } from '../../infra/database/database-errors.js';
+import {
+  isLockConflict,
+  isTransientDatabaseError,
+} from '../../infra/database/database-errors.js';
 import { failpoint } from '../../infra/failpoints.js';
+import { METRICS, type Metrics } from '../../infra/observability/metrics.js';
 import { wagerMessageSchema } from './wager-message.schema.js';
 
 export const SQS_CONSUMER_CONFIG = Symbol('SqsConsumerConfig');
@@ -48,6 +52,7 @@ export class WagerTransactionsConsumer
     @Inject(ConsumeWagerMessageUseCase)
     private readonly consumeWagerMessage: ConsumeWagerMessageUseCase,
     @Inject(SQS_CONSUMER_CONFIG) private readonly config: SqsConsumerConfig,
+    @Inject(METRICS) private readonly metrics: Metrics,
   ) {}
 
   onApplicationBootstrap(): void {
@@ -110,16 +115,50 @@ export class WagerTransactionsConsumer
       return this.deadLetter(message, 'INVALID_MESSAGE', parsed.error.message);
     }
 
+    const { messageId, data } = parsed.data;
+    const stopTimer = this.metrics.processingSeconds.startTimer({
+      source: 'sqs',
+    });
     try {
-      await this.consumeWagerMessage.execute({
-        messageId: parsed.data.messageId,
-        data: parsed.data.data,
+      const consumed = await this.consumeWagerMessage.execute({
+        messageId,
+        data,
+      });
+      stopTimer();
+      if (consumed.duplicate) {
+        this.metrics.duplicates.inc({ source: 'sqs' });
+      } else {
+        const { transaction, idempotentReplay } = consumed.result;
+        if (idempotentReplay) {
+          this.metrics.duplicates.inc({ source: 'sqs' });
+        } else {
+          this.metrics.transactions.inc({
+            source: 'sqs',
+            kind: transaction.kind,
+            status: transaction.status,
+          });
+        }
+      }
+      this.logger.log({
+        event: 'sqs.message.processed',
+        messageId,
+        correlationId: messageId,
+        transactionId: consumed.duplicate
+          ? undefined
+          : consumed.result.transaction.id,
+        walletId: data.walletId,
+        providerId: data.providerId,
+        status: consumed.duplicate
+          ? 'DUPLICATE'
+          : consumed.result.transaction.status,
       });
     } catch (error) {
       if (error instanceof DomainError) {
         return this.deadLetter(message, error.code, error.message);
       }
-      if (!isTransientDatabaseError(error)) {
+      if (isLockConflict(error)) {
+        this.metrics.lockConflicts.inc({ source: 'sqs' });
+      } else if (!isTransientDatabaseError(error)) {
         this.logger.error(error);
       }
       return this.retryLater(message);
@@ -140,7 +179,12 @@ export class WagerTransactionsConsumer
     code: string,
     reason: string,
   ): Promise<Outcome> {
-    this.logger.warn(`Message ${message.MessageId} sent to DLQ: ${code}`);
+    this.metrics.deadLetters.inc({ reason: code });
+    this.logger.warn({
+      event: 'sqs.message.dead_lettered',
+      messageId: message.MessageId,
+      reason: code,
+    });
     await this.sqs.send(
       new SendMessageCommand({
         QueueUrl: this.config.deadLetterQueueUrl,
@@ -173,6 +217,7 @@ export class WagerTransactionsConsumer
       this.config.retryBaseDelaySeconds * 2 ** (receiveCount - 1),
       this.config.retryMaxDelaySeconds,
     );
+    this.metrics.retries.inc({ component: 'sqs_consumer' });
     await this.changeVisibility(message, delay);
     return 'retry';
   }

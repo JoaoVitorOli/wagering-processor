@@ -6,6 +6,7 @@ import {
   type OnApplicationShutdown,
 } from '@nestjs/common';
 import { ResolvePendingReferencesUseCase } from '../../application/wagering/resolve-pending-references.use-case.js';
+import { METRICS, type Metrics } from '../../infra/observability/metrics.js';
 
 export const PENDING_REFERENCE_WORKER_CONFIG = Symbol(
   'PendingReferenceWorkerConfig',
@@ -30,6 +31,7 @@ export class PendingReferenceWorker
     private readonly resolvePendingReferences: ResolvePendingReferencesUseCase,
     @Inject(PENDING_REFERENCE_WORKER_CONFIG)
     private readonly config: PendingReferenceWorkerConfig,
+    @Inject(METRICS) private readonly metrics: Metrics,
   ) {}
 
   onApplicationBootstrap(): void {
@@ -49,7 +51,14 @@ export class PendingReferenceWorker
     }
     this.running = this.resolvePendingReferences
       .execute(this.config.batchSize)
-      .then(({ failures }) => {
+      .then(({ resolved, rescheduled, failures }) => {
+        for (const { kind, status } of resolved) {
+          this.metrics.transactions.inc({ source: 'worker', kind, status });
+        }
+        this.metrics.retries.inc(
+          { component: 'pending_reference' },
+          rescheduled,
+        );
         for (const failure of failures) {
           this.logger.warn(failure);
         }
