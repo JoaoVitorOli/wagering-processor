@@ -1,5 +1,8 @@
-import type { EntityManager } from '@mikro-orm/postgresql';
-import type { WagerTransactionRepository } from '../../../application/ports/unit-of-work.js';
+import { type EntityManager, LockMode } from '@mikro-orm/postgresql';
+import type {
+  DueTransaction,
+  WagerTransactionRepository,
+} from '../../../application/ports/unit-of-work.js';
 import {
   type WagerTransaction,
   WagerTransactionKind,
@@ -62,6 +65,44 @@ export class MikroOrmWagerTransactionRepository implements WagerTransactionRepos
     return reversals > 0;
   }
 
+  async findDuePendingReferences(
+    now: Date,
+    limit: number,
+  ): Promise<DueTransaction[]> {
+    const records = await this.em.find(
+      WagerTransactionSchema,
+      {
+        status: WagerTransactionStatus.PendingReference,
+        nextReferenceAttemptAt: { $lte: now },
+      },
+      {
+        fields: ['id', 'wallet'],
+        orderBy: { nextReferenceAttemptAt: 'asc' },
+        limit,
+      },
+    );
+    return records.map((record) => ({
+      transactionId: record.id,
+      walletId: record.wallet.id,
+    }));
+  }
+
+  async findDuePendingReferenceForUpdate(
+    transactionId: string,
+    now: Date,
+  ): Promise<WagerTransaction | undefined> {
+    const record = await this.em.findOne(
+      WagerTransactionSchema,
+      {
+        id: transactionId,
+        status: WagerTransactionStatus.PendingReference,
+        nextReferenceAttemptAt: { $lte: now },
+      },
+      { populate: ['wallet'], lockMode: LockMode.PESSIMISTIC_WRITE },
+    );
+    return record ? WagerTransactionMapper.toDomain(record) : undefined;
+  }
+
   async update(transaction: WagerTransaction): Promise<void> {
     const record = WagerTransactionMapper.toRecord(transaction);
     await this.em.nativeUpdate(
@@ -73,6 +114,8 @@ export class MikroOrmWagerTransactionRepository implements WagerTransactionRepos
         resultBalance: record.resultBalance,
         referenceTransaction: record.referenceTransaction,
         processedAt: record.processedAt,
+        referenceAttempts: record.referenceAttempts,
+        nextReferenceAttemptAt: record.nextReferenceAttemptAt,
       },
     );
   }
