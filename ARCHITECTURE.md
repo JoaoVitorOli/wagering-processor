@@ -84,6 +84,8 @@ Criar carteira não faz SELECT antes do INSERT. Duas requisições simultâneas 
 
 O índice de reversão ignora `NULL`. Por isso o `reversal_resolved_check` obriga toda reversão processada a apontar para a transação revertida, sem ele, uma reversão com referência nula escaparia do índice e a mesma transação poderia ser revertida duas vezes.
 
+Outbox: `attempts >= 0` e índice parcial nos não publicados.
+
 ## Migrações
 
 São geradas de forma automática a partir do script `migration:create`, para migrações escritas a mão é usado o `migration:create:blank`.
@@ -109,6 +111,8 @@ Os testes HTTP sobem o `AppModule` real e trocam só a configuração do banco (
 Os testes de concorrência sobem três instâncias da aplicação apontando para o mesmo banco e disparam requisições em paralelo: duas apostas de 80 numa carteira de 100, 50 cópias da mesma aposta e 45 requisições espalhadas pelas três instâncias. Também conferem que travar uma carteira não bloqueia outra e que um lock além do limite responde 503, com o reenvio aplicado uma vez. Todos terminam conferindo que o saldo da carteira é igual à soma do ledger. Sem o `FOR UPDATE`, esses testes falham.
 
 Os testes de referência cobrem cada tipo, cada código de falha, a regra de uma reversão por transação e a referência ausente. Um teste de concorrência envia um REFUND e um ROLLBACK da mesma BET ao mesmo tempo, por instâncias diferentes, e confere que só um é aplicado.
+
+Atomicidade: se a outbox falha, carteira, transação e ledger ficam intactos.
 
 ## Erros globais de regras de negócio
 
@@ -191,6 +195,17 @@ O fluxo de uma BET acontece numa única transação SQL:
 Cada transação tem `lock_timeout` (`LOCK_TIMEOUT_MS`, padrão 5 s). Se a carteira continuar travada além disso, a requisição responde 503 em vez de esperar para sempre e segurar conexões.
 
 Fazer o reenvio é seguro, pois o erro acontece antes do commit, quer dizer que houve o rollback e nada foi gravado. Caso o provedor reenvie, a idempotência aplica só a primeira.
+
+## Outbox
+
+Eventos são gravados em `outbox_messages` na mesma transação da operação e publicados depois por um worker. Publicar antes do commit poderia anunciar um rollback; depois, perder o evento se o processo morresse.
+
+- PROCESSED: `WagerTransactionProcessed` (+ `WalletBalanceChanged` se o saldo mudou)
+- REJECTED: `WagerTransactionRejected`
+- PENDING_REFERENCE: `WagerTransactionPendingReference`
+- replay: nenhum
+
+`aggregateId` é a carteira (ordem por carteira); `eventId` único permite deduplicar no consumidor.
 
 ## Status e transições
 
