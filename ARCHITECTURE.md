@@ -41,6 +41,135 @@ O projeto não usa o CLI do Nest (`nest-cli.json`, `tsconfig.build.json`): não 
 
 As imagens têm versão fixa (`postgres:16-alpine` e `localstack/localstack:4.8.1`), para que todos que executem tenham a mesma infra. As portas são configuráveis por `POSTGRES_PORT` e `LOCALSTACK_PORT`.
 
+## Money
+
+O dinheiro usa o `decimal.js`, que faz as contas decimais exatas: `0.1 + 0.2` é `0.3`. O `number` é proibido para dinheiro.
+
+O valor é conferido por uma regex antes de chegar no `Decimal`, porque o `Decimal` aceitaria `1e3` e `Infinity`. A regex permite até 16 dígitos inteiros, o mesmo limite da coluna `numeric(18,2)`. O `Money` usa uma cópia do `Decimal` com precisão própria (`Decimal.clone({ precision: 40 })`), para não depender da configuração global.
+
+As regras de entrada são lidadas com o `Money.from` que transforma, por exemplo, `'25.5'` em `'25.50'`, os valores saem como string e com duas casas.
+
+As regras de entrada incluem a recusa de: NaN, Infinity, notação científica, vazio, mais de 2 casas depois do ponto (mais de 2 casas não é arredondado, é recusado), negativo, `+`, vírgula, espaços.
+
+O `money.errors.ts` cuida de implementar os erros referentes ao Money.
+
+Somar, subtrair e comparar com `isLessThan` lançam `CurrencyMismatchError`, porque não têm resposta sem câmbio. Já `equals` devolve `false`, porque valores em moedas diferentes simplesmente não são iguais.
+
+## Erros globais de regras de negócio
+
+O `src/domain/shared/domain-error.ts` é uma classe abstrata que é a base de todos os erros de regra de negócio. Cada erro possui um código próprio que a camada HTTP pode usar para escolher o status da resposta sem depender do texto da mensagem.
+
+## Wallet e ledger
+
+A `Wallet` é o aggregate root, o saldo só muda por `debit` e `credit`, os dois sempre geram o lançamento, os dois devolvem o `WalletLedgerEntry` correspondente.
+
+O `version` começa em 1, com ou sem saldo inicial, e só sobe quando o saldo muda.
+
+O `Wallet.open` cria o lançamento de abertura com saldo inicial maior que zero. Com saldo zero, não cria lançamento. Saldo inicial negativo é recusado.
+
+O `canDebit` só consulta se o débito cabe no saldo. Quem escolhe o `failureCode` é o caso de uso, porque a carteira não sabe se é uma aposta ou uma reversão (ver Códigos de falha). O `debit` ainda lança `InsufficientFundsError` como última proteção.
+
+O lançamento é criado e validado antes de a carteira mudar. Se a validação falhar, a carteira fica exatamente como estava.
+
+O `WalletLedgerEntry` não tem nenhum campo que possa mudar: além do `readonly`, o objeto é congelado com `Object.freeze`, então qualquer tentativa de alteração lança erro em tempo de execução.
+
+## Criação e rehydrate
+
+`Wallet.open` e `WalletLedgerEntry.create` são usados para o que está nascendo agora, e validam todas as regras.
+
+`rehydrate` reconstrói o que veio do banco, sem validar e sem mudar a versão. O dado já foi validado quando nasceu, e revalidar impediria ler registros antigos se uma regra mudasse.
+
+## Ids e datas
+
+O domínio não gera ids nem lê o relógio: recebe tudo pronto. Quem gera é a aplicação, pelas portas `IdGenerator` e `Clock`, e os testes podem usar valores fixos.
+
+Os ids são UUIDv7 (`Bun.randomUUIDv7()`), como nos exemplos do enunciado. Eles começam pelo horário, então cada id novo entra no fim do índice da chave primária, e não em posições aleatórias.
+
+## Transações
+
+Aqui toda a operação gera transação, mas só as que movem dinheiro geram lançamento, então uma BET que é rejeitada, por exemplo, é registrada sem mexer no ledger.
+
+Na transação de abertura é usado o provedor `internal` e identificadores derivados do id da carteira, o que impede duas aberturas para a mesma carteira. Já nasce como `PROCESSED`, porque acontece junto com a criação da carteira e não tem regra a avaliar.
+
+O banco não garante que a moeda da transação seja a da carteira, nem que a referência seja da mesma carteira. Quem garante é o caso de uso, dentro do lock da carteira.
+
+### Status e transições
+
+```
+PENDING ──► PENDING_REFERENCE ──► PROCESSED | REJECTED | FAILED
+   └────────────────────────────► PROCESSED | REJECTED | FAILED
+```
+
+- `PENDING`: recebida, ainda não aplicada.
+- `PENDING_REFERENCE`: aguardando a transação referenciada chegar.
+- `PROCESSED`, `REJECTED` e `FAILED` são finais. Tentar mudar uma transação finalizada lança `InvalidTransactionStateError`, porque isso só acontece por erro de programação. O provedor já recebeu a resposta e o ledger já foi gravado; para desfazer algo, é preciso uma nova operação (REFUND ou ROLLBACK).
+
+As transições permitidas ficam numa tabela no código, e é ela que define quais status são finais.
+
+### Efeito de cada operação
+
+- BET - débito
+- WIN, REFUND, OPENING - crédito
+- LOSS - nenhum
+- ROLLBACK - o inverso das referências acima, crédito para BET e débito para WIN e REFUND.
+
+O que cada tipo pode referenciar:
+
+- WIN e LOSS: uma BET, opcionalmente;
+- REFUND: uma BET;
+- ROLLBACK: uma BET, um WIN ou um REFUND. ROLLBACK de ROLLBACK é recusado.
+
+O enunciado diz que o WIN "pode" referenciar a BET. Então WIN e LOSS são aceitos com ou sem referência.
+
+A BET com referência é recusada, porque uma aposta não reverte nem completa outra operação.
+
+A transação que referencia a si mesma é recusada também, ela ficaria esperando por ela mesma eternamente.
+
+O enunciado não definiu o valor do LOSS, então ele aceita `0.00`, porque não move saldo e só registra o resultado da rodada. As demais operações exigem valor positivo.
+
+### Referências
+
+A referência é procurada por `providerId` + `referenceExternalTransactionId` e conferida nesta ordem:
+
+1. não existe: a transação fica PENDING_REFERENCE (202) e é processada quando a referência chegar;
+2. de outro provedor, carteira, jogador, moeda ou rodada: `REFERENCE_CONTEXT_MISMATCH`;
+3. de um tipo que não pode ser referenciado: `REFERENCE_KIND_NOT_ALLOWED`;
+4. ainda PENDING_REFERENCE: esta também fica pendente;
+5. REJECTED ou FAILED: `REFERENCE_NOT_PROCESSED`;
+6. para REFUND e ROLLBACK: valor diferente do da referência dá `AMOUNT_MISMATCH`, e referência já revertida dá `REFERENCE_ALREADY_REVERSED`.
+
+Como a referência precisa ser da mesma carteira, ela também está protegida pelo lock da carteira.
+
+Pendentes são retentadas por um worker (a cada 1 s): espera de 1 s dobrando até 60 s, no máximo 10 tentativas (~5 min). Esgotou: REJECTED `REFERENCE_NOT_FOUND`. Retentativa sem sucesso não gera evento. O replay de uma pendente já resolvida devolve o estado atual.
+
+**Interpretação da regra 4.** O enunciado diz que uma referência não pode ser revertida duas vezes "pelo mesmo tipo". Lido ao pé da letra, uma BET aceitaria um REFUND e também um ROLLBACK, e o jogador receberia o valor de volta duas vezes. Crédito duplicado é falha eliminatória, então a regra adotada é mais rígida: cada transação pode ser revertida uma única vez, por qualquer tipo. O ROLLBACK de um REFUND continua permitido, porque reverte outra transação.
+
+**Limitação.** Depois que um REFUND é desfeito por um ROLLBACK, a BET original não pode ser reembolsada de novo: o REFUND continua contando como a reversão dela.
+
+### Saldo no resultado
+
+A transação guarda o saldo de quando terminou (`resultBalance`). Assim, uma requisição repetida devolve exatamente a resposta original, com o saldo daquele momento, e não o saldo atual.
+
+O `resultBalance` é sempre o saldo da carteira, na moeda dela, inclusive quando a transação foi recusada por moeda diferente.
+
+### Códigos de falha (`failure-code`)
+
+- `INSUFFICIENT_FUNDS` - Sem fundos suficientes para fazer a aposta. O provedor não deve reenviar a mesma operação.
+- `PROCESSING_FAILED` - Reservado para erro permanente de infraestrutura (status `FAILED`); deve ser investigado antes de reenviar. Nenhum fluxo usa hoje.
+- `CURRENCY_MISMATCH` - A moeda da transação é diferente da moeda da carteira. O provedor deve corrigir o payload, não reenviar igual.
+- `PLAYER_MISMATCH` - O jogador da transação não é o dono da carteira. O provedor deve corrigir o payload, não reenviar igual.
+- `REVERSAL_WOULD_OVERDRAW` - A reversão deixaria o saldo negativo (por exemplo, o ROLLBACK de um WIN que já foi apostado). Fica registrada e não deve ser reenviada igual.
+- `REFERENCE_CONTEXT_MISMATCH` - A referência é de outro provedor, carteira, jogador, moeda ou rodada. Corrigir o payload.
+- `REFERENCE_KIND_NOT_ALLOWED` - O tipo da referência não pode ser referenciado por este tipo (REFUND de WIN, ROLLBACK de ROLLBACK). Corrigir o payload.
+- `REFERENCE_NOT_PROCESSED` - A referência existe, mas foi recusada ou falhou. Não reenviar.
+- `REFERENCE_ALREADY_REVERSED` - A referência já foi revertida. Não reenviar.
+- `AMOUNT_MISMATCH` - O valor da reversão é diferente do valor da referência. Corrigir o payload.
+- `REFERENCE_NOT_FOUND` - A referência não chegou no prazo. Final; reenviar como nova transação.
+
+`INSUFFICIENT_FUNDS` e `REVERSAL_WOULD_OVERDRAW` são separados, como o enunciado pede: uma aposta sem saldo e uma reversão que estouraria o saldo são situações operacionais diferentes. Por isso a carteira expõe `canDebit` separado de `debit`: quem escolhe o código é o caso de uso.
+
+O `failure_code` não tem CHECK de lista: é um texto, para que um código novo não precise de migração. O domínio garante os valores, e o campo não mexe com dinheiro.
+
 ## Persistência
 
 PostgreSQL com MikroORM, a opção preferencial do enunciado. Os pacotes do MikroORM têm versão exata, porque precisam estar todos na mesma versão.
@@ -101,78 +230,6 @@ Os scripts usam `--bun` para o CLI ler a configuração em TypeScript e `--env-f
 
 O gerador cria todas as migrations, inclusive a trigger de UPDATE/DELETE. Com exceção do trigger de TRUNCATE, que é preciso ser feita a mão, pois o MikroORM não enxerga e recriaria ela a cada migração.
 
-## Testes de integração
-
-Usam o PostgreSQL real, sem mock. Cada arquivo de teste cria um banco aleatório (`wagering_test_` + UUID), aplica as migrações e apaga o banco no final. Isso em vez de limpar tabelas porque:
-
-- testes em paralelo não interferem entre si;
-- o ledger não permite apagar linhas;
-- todo teste também prova que as migrações funcionam.
-
-Os testes de schema conferem o nome da constraint que recusa cada dado errado. Também há casos positivos: outra moeda para o mesmo jogador, o mesmo id externo em outro provedor, LOSS com `0.00` e reversões recusadas que não ocupam o índice de reversão.
-
-Os testes HTTP sobem o `AppModule` real e trocam só a configuração do banco (`ORM_CONFIG`), apontando para o banco descartável. As requisições usam `fetch` numa porta livre. Além das respostas, os testes conferem direto no banco que a OPENING e o lançamento foram gravados.
-
-Os testes de concorrência sobem três instâncias da aplicação apontando para o mesmo banco e disparam requisições em paralelo: duas apostas de 80 numa carteira de 100, 50 cópias da mesma aposta e 45 requisições espalhadas pelas três instâncias. Também conferem que travar uma carteira não bloqueia outra e que um lock além do limite responde 503, com o reenvio aplicado uma vez. Todos terminam conferindo que o saldo da carteira é igual à soma do ledger. Sem o `FOR UPDATE`, esses testes falham.
-
-Os testes de referência cobrem cada tipo, cada código de falha, a regra de uma reversão por transação e a referência ausente. Um teste de concorrência envia um REFUND e um ROLLBACK da mesma BET ao mesmo tempo, por instâncias diferentes, e confere que só um é aplicado.
-
-Atomicidade: se a outbox falha, carteira, transação e ledger ficam intactos.
-
-Todo arquivo de teste termina conferindo que cada carteira tem saldo igual à soma do ledger. Os testes de processos sobem três `bun src/main.ts` reais no mesmo banco e filas, matam um processo entre o commit e o ack (failpoint `FAILPOINTS`, inerte sem a variável) e reiniciam no meio do trabalho, conferindo a consistência final. As migrações são revertidas e reaplicadas.
-
-## Erros globais de regras de negócio
-
-O `src/domain/shared/domain-error.ts` é uma classe abstrata que é a base de todos os erros de regra de negócio. Cada erro possui um código próprio que a camada HTTP pode usar para escolher o status da resposta sem depender do texto da mensagem.
-
-## Money
-
-O dinheiro usa o `decimal.js`, que faz as contas decimais exatas: `0.1 + 0.2` é `0.3`. O `number` é proibido para dinheiro.
-
-O valor é conferido por uma regex antes de chegar no `Decimal`, porque o `Decimal` aceitaria `1e3` e `Infinity`. A regex permite até 16 dígitos inteiros, o mesmo limite da coluna `numeric(18,2)`. O `Money` usa uma cópia do `Decimal` com precisão própria (`Decimal.clone({ precision: 40 })`), para não depender da configuração global.
-
-As regras de entrada são lidadas com o `Money.from` que transforma, por exemplo, `'25.5'` em `'25.50'`, os valores saem como string e com duas casas.
-
-As regras de entrada incluem a recusa de: NaN, Infinity, notação científica, vazio, mais de 2 casas depois do ponto (mais de 2 casas não é arredondado, é recusado), negativo, `+`, vírgula, espaços.
-
-O `money.errors.ts` cuida de implementar os erros referentes ao Money.
-
-Somar, subtrair e comparar com `isLessThan` lançam `CurrencyMismatchError`, porque não têm resposta sem câmbio. Já `equals` devolve `false`, porque valores em moedas diferentes simplesmente não são iguais.
-
-## Wallet e ledger
-
-A `Wallet` é o aggregate root, o saldo só muda por `debit` e `credit`, os dois sempre geram o lançamento, os dois devolvem o `WalletLedgerEntry` correspondente.
-
-O `version` começa em 1, com ou sem saldo inicial, e só sobe quando o saldo muda.
-
-O `Wallet.open` cria o lançamento de abertura com saldo inicial maior que zero. Com saldo zero, não cria lançamento. Saldo inicial negativo é recusado.
-
-O `canDebit` só consulta se o débito cabe no saldo. Quem escolhe o `failureCode` é o caso de uso, porque a carteira não sabe se é uma aposta ou uma reversão (ver Códigos de falha). O `debit` ainda lança `InsufficientFundsError` como última proteção.
-
-O lançamento é criado e validado antes de a carteira mudar. Se a validação falhar, a carteira fica exatamente como estava.
-
-O `WalletLedgerEntry` não tem nenhum campo que possa mudar: além do `readonly`, o objeto é congelado com `Object.freeze`, então qualquer tentativa de alteração lança erro em tempo de execução.
-
-## Criação e rehydrate
-
-`Wallet.open` e `WalletLedgerEntry.create` são usados para o que está nascendo agora, e validam todas as regras.
-
-`rehydrate` reconstrói o que veio do banco, sem validar e sem mudar a versão. O dado já foi validado quando nasceu, e revalidar impediria ler registros antigos se uma regra mudasse.
-
-## Ids e datas
-
-O domínio não gera ids nem lê o relógio: recebe tudo pronto. Quem gera é a aplicação, pelas portas `IdGenerator` e `Clock`, e os testes podem usar valores fixos.
-
-Os ids são UUIDv7 (`Bun.randomUUIDv7()`), como nos exemplos do enunciado. Eles começam pelo horário, então cada id novo entra no fim do índice da chave primária, e não em posições aleatórias.
-
-## Transações
-
-Aqui toda a operação gera transação, mas só as que movem dinheiro geram lançamento, então uma BET que é rejeitada, por exemplo, é registrada sem mexer no ledger.
-
-Na transação de abertura é usado o provedor `internal` e identificadores derivados do id da carteira, o que impede duas aberturas para a mesma carteira. Já nasce como `PROCESSED`, porque acontece junto com a criação da carteira e não tem regra a avaliar.
-
-O banco não garante que a moeda da transação seja a da carteira, nem que a referência seja da mesma carteira. Quem garante é o caso de uso, dentro do lock da carteira.
-
 ## Idempotência
 
 O header `Idempotency-Key` é obrigatório e é a fonte da verdade. Sem ele, a resposta é 400.
@@ -230,95 +287,6 @@ O consumidor usa o mesmo caso de uso do HTTP. A inbox `(consumer_name, message_i
 
 Mensagens de um lote são processadas em ordem (grupo FIFO = carteira). No SIGTERM, a mensagem atual termina e o resto volta para a fila.
 
-## Observabilidade
-
-Logs em JSON (logger do Nest), com `correlationId`, `messageId`, `transactionId`, `walletId` e `providerId`; sem valores nem payloads. O `correlationId` vem do header `x-correlation-id` (ou é gerado), volta na resposta e vai para os eventos; na fila é o `messageId`.
-
-Métricas em `/metrics`: transações por status, duplicatas, retries, DLQ, conflitos de lock, outbox lag, latência e divergências de reconciliação.
-
-`/health/live` responde se o processo está de pé; `/health/ready` testa Postgres e SQS e responde 503 se algum estiver fora.
-
-## Autenticação
-
-Não implementada, como o enunciado permite. O desenho seria um IdP externo (ex.: Keycloak) com client credentials por provedor, conferindo que o `providerId` do token é o do corpo. O ponto de extensão é o `ProviderAuthGuard`, hoje sem efeito, aplicado às rotas de provedor.
-
-## Status e transições
-
-```
-PENDING ──► PENDING_REFERENCE ──► PROCESSED | REJECTED | FAILED
-   └────────────────────────────► PROCESSED | REJECTED | FAILED
-```
-
-- `PENDING`: recebida, ainda não aplicada.
-- `PENDING_REFERENCE`: aguardando a transação referenciada chegar.
-- `PROCESSED`, `REJECTED` e `FAILED` são finais. Tentar mudar uma transação finalizada lança `InvalidTransactionStateError`, porque isso só acontece por erro de programação. O provedor já recebeu a resposta e o ledger já foi gravado; para desfazer algo, é preciso uma nova operação (REFUND ou ROLLBACK).
-
-As transições permitidas ficam numa tabela no código, e é ela que define quais status são finais.
-
-## Efeito de cada operação
-
-- BET - débito
-- WIN, REFUND, OPENING - crédito
-- LOSS - nenhum
-- ROLLBACK - o inverso das referências acima, crédito para BET e débito para WIN e REFUND.
-
-O que cada tipo pode referenciar:
-
-- WIN e LOSS: uma BET, opcionalmente;
-- REFUND: uma BET;
-- ROLLBACK: uma BET, um WIN ou um REFUND. ROLLBACK de ROLLBACK é recusado.
-
-O enunciado diz que o WIN "pode" referenciar a BET. Então WIN e LOSS são aceitos com ou sem referência.
-
-A BET com referência é recusada, porque uma aposta não reverte nem completa outra operação.
-
-A transação que referencia a si mesma é recusada também, ela ficaria esperando por ela mesma eternamente.
-
-O enunciado não definiu o valor do LOSS, então ele aceita `0.00`, porque não move saldo e só registra o resultado da rodada. As demais operações exigem valor positivo.
-
-## Referências
-
-A referência é procurada por `providerId` + `referenceExternalTransactionId` e conferida nesta ordem:
-
-1. não existe: a transação fica PENDING_REFERENCE (202) e é processada quando a referência chegar;
-2. de outro provedor, carteira, jogador, moeda ou rodada: `REFERENCE_CONTEXT_MISMATCH`;
-3. de um tipo que não pode ser referenciado: `REFERENCE_KIND_NOT_ALLOWED`;
-4. ainda PENDING_REFERENCE: esta também fica pendente;
-5. REJECTED ou FAILED: `REFERENCE_NOT_PROCESSED`;
-6. para REFUND e ROLLBACK: valor diferente do da referência dá `AMOUNT_MISMATCH`, e referência já revertida dá `REFERENCE_ALREADY_REVERSED`.
-
-Como a referência precisa ser da mesma carteira, ela também está protegida pelo lock da carteira.
-
-Pendentes são retentadas por um worker (a cada 1 s): espera de 1 s dobrando até 60 s, no máximo 10 tentativas (~5 min). Esgotou: REJECTED `REFERENCE_NOT_FOUND`. Retentativa sem sucesso não gera evento. O replay de uma pendente já resolvida devolve o estado atual.
-
-**Interpretação da regra 4.** O enunciado diz que uma referência não pode ser revertida duas vezes "pelo mesmo tipo". Lido ao pé da letra, uma BET aceitaria um REFUND e também um ROLLBACK, e o jogador receberia o valor de volta duas vezes. Crédito duplicado é falha eliminatória, então a regra adotada é mais rígida: cada transação pode ser revertida uma única vez, por qualquer tipo. O ROLLBACK de um REFUND continua permitido, porque reverte outra transação.
-
-**Limitação.** Depois que um REFUND é desfeito por um ROLLBACK, a BET original não pode ser reembolsada de novo: o REFUND continua contando como a reversão dela.
-
-## Saldo no resultado
-
-A transação guarda o saldo de quando terminou (`resultBalance`). Assim, uma requisição repetida devolve exatamente a resposta original, com o saldo daquele momento, e não o saldo atual.
-
-O `resultBalance` é sempre o saldo da carteira, na moeda dela, inclusive quando a transação foi recusada por moeda diferente.
-
-## Códigos de falha (`failure-code`)
-
-- `INSUFFICIENT_FUNDS` - Sem fundos suficientes para fazer a aposta. O provedor não deve reenviar a mesma operação.
-- `PROCESSING_FAILED` - Reservado para erro permanente de infraestrutura (status `FAILED`); deve ser investigado antes de reenviar. Nenhum fluxo usa hoje.
-- `CURRENCY_MISMATCH` - A moeda da transação é diferente da moeda da carteira. O provedor deve corrigir o payload, não reenviar igual.
-- `PLAYER_MISMATCH` - O jogador da transação não é o dono da carteira. O provedor deve corrigir o payload, não reenviar igual.
-- `REVERSAL_WOULD_OVERDRAW` - A reversão deixaria o saldo negativo (por exemplo, o ROLLBACK de um WIN que já foi apostado). Fica registrada e não deve ser reenviada igual.
-- `REFERENCE_CONTEXT_MISMATCH` - A referência é de outro provedor, carteira, jogador, moeda ou rodada. Corrigir o payload.
-- `REFERENCE_KIND_NOT_ALLOWED` - O tipo da referência não pode ser referenciado por este tipo (REFUND de WIN, ROLLBACK de ROLLBACK). Corrigir o payload.
-- `REFERENCE_NOT_PROCESSED` - A referência existe, mas foi recusada ou falhou. Não reenviar.
-- `REFERENCE_ALREADY_REVERSED` - A referência já foi revertida. Não reenviar.
-- `AMOUNT_MISMATCH` - O valor da reversão é diferente do valor da referência. Corrigir o payload.
-- `REFERENCE_NOT_FOUND` - A referência não chegou no prazo. Final; reenviar como nova transação.
-
-`INSUFFICIENT_FUNDS` e `REVERSAL_WOULD_OVERDRAW` são separados, como o enunciado pede: uma aposta sem saldo e uma reversão que estouraria o saldo são situações operacionais diferentes. Por isso a carteira expõe `canDebit` separado de `debit`: quem escolhe o código é o caso de uso.
-
-O `failure_code` não tem CHECK de lista: é um texto, para que um código novo não precise de migração. O domínio garante os valores, e o campo não mexe com dinheiro.
-
 ## API
 
 A validação da API acontece em dois níveis. O zod confere o formato (`playerId` é UUID, `amount` e `currency` são strings) e responde 400 `INVALID_PAYLOAD` com os campos que estão errados. O domínio `Money` cuida das regras do valor, que responde com `INVALID_MONEY`.
@@ -341,3 +309,35 @@ Todo erro responde no formato `{ code, message }`. O `DomainErrorFilter` escolhe
 Os erros do banco passam pelo `DatabaseErrorFilter`: os transitórios viram 503 e os demais viram 500, sem expor SQL na resposta.
 
 Os filtros são registrados com `APP_FILTER` no `AppModule`, e não no `main.ts`: os testes sobem o `AppModule` sem executar o `main.ts`, e assim os filtros valem nos dois.
+
+## Testes de integração
+
+Usam o PostgreSQL real, sem mock. Cada arquivo de teste cria um banco aleatório (`wagering_test_` + UUID), aplica as migrações e apaga o banco no final. Isso em vez de limpar tabelas porque:
+
+- testes em paralelo não interferem entre si;
+- o ledger não permite apagar linhas;
+- todo teste também prova que as migrações funcionam.
+
+Os testes de schema conferem o nome da constraint que recusa cada dado errado. Também há casos positivos: outra moeda para o mesmo jogador, o mesmo id externo em outro provedor, LOSS com `0.00` e reversões recusadas que não ocupam o índice de reversão.
+
+Os testes HTTP sobem o `AppModule` real e trocam só a configuração do banco (`ORM_CONFIG`), apontando para o banco descartável. As requisições usam `fetch` numa porta livre. Além das respostas, os testes conferem direto no banco que a OPENING e o lançamento foram gravados.
+
+Os testes de concorrência sobem três instâncias da aplicação apontando para o mesmo banco e disparam requisições em paralelo: duas apostas de 80 numa carteira de 100, 50 cópias da mesma aposta e 45 requisições espalhadas pelas três instâncias. Também conferem que travar uma carteira não bloqueia outra e que um lock além do limite responde 503, com o reenvio aplicado uma vez. Todos terminam conferindo que o saldo da carteira é igual à soma do ledger. Sem o `FOR UPDATE`, esses testes falham.
+
+Os testes de referência cobrem cada tipo, cada código de falha, a regra de uma reversão por transação e a referência ausente. Um teste de concorrência envia um REFUND e um ROLLBACK da mesma BET ao mesmo tempo, por instâncias diferentes, e confere que só um é aplicado.
+
+Atomicidade: se a outbox falha, carteira, transação e ledger ficam intactos.
+
+Todo arquivo de teste termina conferindo que cada carteira tem saldo igual à soma do ledger. Os testes de processos sobem três `bun src/main.ts` reais no mesmo banco e filas, matam um processo entre o commit e o ack (failpoint `FAILPOINTS`, inerte sem a variável) e reiniciam no meio do trabalho, conferindo a consistência final. As migrações são revertidas e reaplicadas.
+
+## Observabilidade
+
+Logs em JSON (logger do Nest), com `correlationId`, `messageId`, `transactionId`, `walletId` e `providerId`; sem valores nem payloads. O `correlationId` vem do header `x-correlation-id` (ou é gerado), volta na resposta e vai para os eventos; na fila é o `messageId`.
+
+Métricas em `/metrics`: transações por status, duplicatas, retries, DLQ, conflitos de lock, outbox lag, latência e divergências de reconciliação.
+
+`/health/live` responde se o processo está de pé; `/health/ready` testa Postgres e SQS e responde 503 se algum estiver fora.
+
+## Autenticação
+
+Não implementada, como o enunciado permite. O desenho seria um IdP externo (ex.: Keycloak) com client credentials por provedor, conferindo que o `providerId` do token é o do corpo. O ponto de extensão é o `ProviderAuthGuard`, hoje sem efeito, aplicado às rotas de provedor.
