@@ -5,8 +5,13 @@ import {
   type WagerTransactionKind,
   WagerTransactionStatus,
 } from '../../domain/wagering/wager-transaction.js';
-import { LedgerDirection } from '../../domain/wallet/wallet-ledger-entry.js';
+import {
+  LedgerDirection,
+  type WalletLedgerEntry,
+} from '../../domain/wallet/wallet-ledger-entry.js';
 import type { Wallet } from '../../domain/wallet/wallet.js';
+import { eventsForTransaction } from '../events/transaction-events.js';
+import { OutboxMessage } from '../outbox/outbox-message.js';
 import type { Clock } from '../ports/clock.js';
 import type { IdGenerator } from '../ports/id-generator.js';
 import type { Repositories, UnitOfWork } from '../ports/unit-of-work.js';
@@ -90,8 +95,15 @@ export class SubmitWagerTransactionUseCase {
         return this.replay(repositories, transaction);
       }
 
-      await this.process(repositories, wallet, transaction);
+      const entry = await this.process(repositories, wallet, transaction);
       await repositories.transactions.update(transaction);
+      await repositories.outbox.add(
+        eventsForTransaction(transaction, wallet, entry, () => ({
+          eventId: this.ids.next(),
+          correlationId: transaction.id,
+          occurredAt: this.clock.now(),
+        })).map(OutboxMessage.enqueue),
+      );
       return { transaction, idempotentReplay: false };
     });
   }
@@ -119,10 +131,12 @@ export class SubmitWagerTransactionUseCase {
     repositories: Repositories,
     wallet: Wallet,
     transaction: WagerTransaction,
-  ): Promise<void> {
+  ): Promise<WalletLedgerEntry | undefined> {
     const at = this.clock.now();
-    const reject = (code: FailureCode) =>
+    const reject = (code: FailureCode) => {
       transaction.reject({ code, resultBalance: wallet.balance, at });
+      return undefined;
+    };
 
     const contextFailure = this.checkWallet(wallet, transaction);
     if (contextFailure) {
@@ -131,9 +145,8 @@ export class SubmitWagerTransactionUseCase {
 
     const resolution = await this.resolveReference(repositories, transaction);
     if ('pending' in resolution) {
-      return transaction.markPendingReference({
-        resultBalance: wallet.balance,
-      });
+      transaction.markPendingReference({ resultBalance: wallet.balance });
+      return undefined;
     }
     if ('failure' in resolution) {
       return reject(resolution.failure);
@@ -141,11 +154,12 @@ export class SubmitWagerTransactionUseCase {
     const { reference } = resolution;
 
     if (!transaction.affectsBalance()) {
-      return transaction.markProcessed({
+      transaction.markProcessed({
         resultBalance: wallet.balance,
         referenceTransactionId: reference?.id,
         at,
       });
+      return undefined;
     }
 
     const direction = transaction.ledgerDirectionFor(reference);
@@ -178,6 +192,7 @@ export class SubmitWagerTransactionUseCase {
       referenceTransactionId: reference?.id,
       at,
     });
+    return entry;
   }
 
   private checkWallet(

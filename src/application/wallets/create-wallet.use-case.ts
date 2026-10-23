@@ -1,6 +1,8 @@
 import { Money, type MoneyProps } from '../../domain/money/money.js';
 import { WagerTransaction } from '../../domain/wagering/wager-transaction.js';
 import { Wallet } from '../../domain/wallet/wallet.js';
+import { eventsForTransaction } from '../events/transaction-events.js';
+import { OutboxMessage } from '../outbox/outbox-message.js';
 import type { Clock } from '../ports/clock.js';
 import type { IdGenerator } from '../ports/id-generator.js';
 import type { UnitOfWork } from '../ports/unit-of-work.js';
@@ -32,22 +34,30 @@ export class CreateWalletUseCase {
       at,
     });
 
-    await this.unitOfWork.run(async ({ wallets, transactions, ledger }) => {
-      await wallets.add(wallet);
-      if (!openingEntry) {
-        return;
-      }
-      await transactions.add(
-        WagerTransaction.opening({
+    await this.unitOfWork.run(
+      async ({ wallets, transactions, ledger, outbox }) => {
+        await wallets.add(wallet);
+        if (!openingEntry) {
+          return;
+        }
+        const opening = WagerTransaction.opening({
           id: openingTransactionId,
           walletId,
           playerId: input.playerId,
           money: initialBalance,
           at,
-        }),
-      );
-      await ledger.add(openingEntry);
-    });
+        });
+        await transactions.add(opening);
+        await ledger.add(openingEntry);
+        await outbox.add(
+          eventsForTransaction(opening, wallet, openingEntry, () => ({
+            eventId: this.ids.next(),
+            correlationId: opening.id,
+            occurredAt: at,
+          })).map(OutboxMessage.enqueue),
+        );
+      },
+    );
 
     return wallet;
   }
