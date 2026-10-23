@@ -29,6 +29,8 @@ export const WagerTransactionSchema = defineEntity({
     resultBalance: p.decimal('string').precision(18).scale(2).nullable(),
     createdAt: p.datetime(),
     processedAt: p.datetime().nullable(),
+    referenceAttempts: p.integer().default(0),
+    nextReferenceAttemptAt: p.datetime().nullable(),
   },
   uniques: [
     { properties: ['providerId', 'externalTransactionId'] },
@@ -38,7 +40,23 @@ export const WagerTransactionSchema = defineEntity({
       where: "status = 'PROCESSED' and kind in ('REFUND', 'ROLLBACK')",
     },
   ],
+  indexes: [
+    {
+      name: 'wager_transactions_pending_reference_index',
+      properties: ['nextReferenceAttemptAt'],
+      where: "status = 'PENDING_REFERENCE'",
+    },
+  ],
   checks: [
+    {
+      name: 'wager_transactions_reference_attempts_check',
+      expression: 'reference_attempts >= 0',
+    },
+    {
+      name: 'wager_transactions_next_reference_attempt_check',
+      expression:
+        "(status = 'PENDING_REFERENCE') = (next_reference_attempt_at is not null)",
+    },
     {
       name: 'wager_transactions_currency_check',
       expression: "currency ~ '^[A-Z]{3}$'",
