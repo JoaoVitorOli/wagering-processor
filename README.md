@@ -27,6 +27,8 @@ Se a porta 5432 já estiver em uso na sua máquina, altere `POSTGRES_PORT` no `.
 
 `PENDING_REFERENCE_WORKER_ENABLED` (padrão `true`) e `PENDING_REFERENCE_WORKER_INTERVAL_MS` (padrão `1000`) controlam o worker de referências pendentes.
 
+`docker compose up -d --wait` sobe o Postgres e o LocalStack; as filas SQS são criadas na subida. `SQS_CONSUMER_ENABLED=false` desliga o consumidor da fila.
+
 Para desenvolver com recarga automática:
 
 ```bash
@@ -81,6 +83,7 @@ bun run test:integration
 - **Unidade** (`src/**/*.spec.ts`): não dependem de nada externo.
 - **Integração** (`test/integration`): usam o Postgres real do Docker Compose, que precisa estar de pé. Cada arquivo de teste cria um banco próprio com nome aleatório, aplica as migrações e apaga o banco no final.
 - **Concorrência** (`test/integration/concurrency`): sobem três instâncias da aplicação sobre o mesmo banco e disparam requisições em paralelo, incluindo o cenário de duas apostas de `80.00` numa carteira de `100.00`.
+- **SQS** (`test/integration/sqs`): usam o LocalStack do Docker Compose, que também precisa estar de pé; cada teste cria filas próprias.
 
 `bun run test` roda as duas suítes.
 
