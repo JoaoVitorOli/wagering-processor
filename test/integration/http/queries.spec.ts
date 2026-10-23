@@ -228,6 +228,11 @@ describe('queries and reconciliation', () => {
         amount: '120.00',
         currency: 'BRL',
       });
+      await database.orm.em
+        .getConnection()
+        .execute("update wallets set balance = '99.00' where id = ?", [
+          wallet.id,
+        ]);
     });
 
     it('returns 404 for an unknown wallet', async () => {

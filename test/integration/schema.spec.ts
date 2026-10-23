@@ -12,7 +12,7 @@ describe('database schema', () => {
   let database: TestDatabase;
 
   beforeAll(async () => {
-    database = await createTestDatabase();
+    database = await createTestDatabase({ checkLedgerOnDrop: false });
   });
 
   afterAll(async () => {
