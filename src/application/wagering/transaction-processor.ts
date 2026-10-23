@@ -8,6 +8,7 @@ import {
   type WalletLedgerEntry,
 } from '../../domain/wallet/wallet-ledger-entry.js';
 import type { Wallet } from '../../domain/wallet/wallet.js';
+import type { Trace } from '../events/integration-event.js';
 import { eventsForTransaction } from '../events/transaction-events.js';
 import { OutboxMessage } from '../outbox/outbox-message.js';
 import type { Clock } from '../ports/clock.js';
@@ -151,10 +152,11 @@ export class TransactionProcessor {
     transaction: WagerTransaction,
     wallet: Wallet,
     entry: WalletLedgerEntry | undefined,
+    trace: Trace = { correlationId: transaction.id },
   ): OutboxMessage[] {
     return eventsForTransaction(transaction, wallet, entry, () => ({
       eventId: this.ids.next(),
-      correlationId: transaction.id,
+      ...trace,
       occurredAt: this.clock.now(),
     })).map(OutboxMessage.enqueue);
   }

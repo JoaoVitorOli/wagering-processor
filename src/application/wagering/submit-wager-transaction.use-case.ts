@@ -3,6 +3,7 @@ import {
   WagerTransaction,
   type WagerTransactionKind,
 } from '../../domain/wagering/wager-transaction.js';
+import type { Trace } from '../events/integration-event.js';
 import type { Clock } from '../ports/clock.js';
 import type { IdGenerator } from '../ports/id-generator.js';
 import type { Repositories, UnitOfWork } from '../ports/unit-of-work.js';
@@ -29,6 +30,7 @@ export interface SubmitWagerTransactionInput {
   kind: WagerTransactionKind;
   money: MoneyProps;
   referenceExternalTransactionId?: string;
+  trace?: Trace;
 }
 
 export interface SubmitWagerTransactionResult {
@@ -114,6 +116,7 @@ export class SubmitWagerTransactionUseCase {
         transaction,
         wallet,
         outcome.pending ? undefined : outcome.entry,
+        input.trace,
       ),
     );
     return { transaction, idempotentReplay: false };

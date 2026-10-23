@@ -3,6 +3,7 @@ import { WagerTransaction } from '../../domain/wagering/wager-transaction.js';
 import { Wallet } from '../../domain/wallet/wallet.js';
 import { eventsForTransaction } from '../events/transaction-events.js';
 import { OutboxMessage } from '../outbox/outbox-message.js';
+import type { Trace } from '../events/integration-event.js';
 import type { Clock } from '../ports/clock.js';
 import type { IdGenerator } from '../ports/id-generator.js';
 import type { UnitOfWork } from '../ports/unit-of-work.js';
@@ -10,6 +11,7 @@ import type { UnitOfWork } from '../ports/unit-of-work.js';
 export interface CreateWalletInput {
   playerId: string;
   initialBalance: MoneyProps;
+  trace?: Trace;
 }
 
 export class CreateWalletUseCase {
@@ -52,7 +54,7 @@ export class CreateWalletUseCase {
         await outbox.add(
           eventsForTransaction(opening, wallet, openingEntry, () => ({
             eventId: this.ids.next(),
-            correlationId: opening.id,
+            correlationId: input.trace?.correlationId ?? opening.id,
             occurredAt: at,
           })).map(OutboxMessage.enqueue),
         );

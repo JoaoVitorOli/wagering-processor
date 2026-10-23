@@ -46,10 +46,13 @@ export class ConsumeWagerMessageUseCase {
         return { duplicate: true };
       }
 
-      const result = await this.submitTransaction.executeIn(
-        repositories,
-        message.data,
-      );
+      const result = await this.submitTransaction.executeIn(repositories, {
+        ...message.data,
+        trace: {
+          correlationId: message.messageId,
+          causationId: message.messageId,
+        },
+      });
       inbox.markProcessed(this.clock.now());
       await repositories.inbox.markProcessed(inbox);
       return { duplicate: false, result };

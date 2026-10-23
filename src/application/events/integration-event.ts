@@ -1,3 +1,8 @@
+export interface Trace {
+  correlationId: string;
+  causationId?: string;
+}
+
 export interface EventContext {
   eventId: string;
   correlationId: string;
