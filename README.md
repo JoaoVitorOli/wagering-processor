@@ -39,11 +39,20 @@ bun run start:dev
 
 ## API
 
-| Método | Rota                     | O que faz                                                            |
-| ------ | ------------------------ | -------------------------------------------------------------------- |
-| `POST` | `/wallets`               | cria uma carteira                                                    |
-| `GET`  | `/wallets/:walletId`     | consulta uma carteira                                                |
-| `POST` | `/wagering/transactions` | submete uma transação (`BET`, `WIN`, `LOSS`, `REFUND` ou `ROLLBACK`) |
+| Método | Rota                                                                  | O que faz                                                            |
+| ------ | --------------------------------------------------------------------- | -------------------------------------------------------------------- |
+| `POST` | `/wallets`                                                            | cria uma carteira                                                    |
+| `GET`  | `/wallets/:walletId`                                                  | consulta uma carteira                                                |
+| `GET`  | `/wallets/:walletId/ledger`                                           | extrato, do mais novo para o mais antigo (`cursor`, `limit`)         |
+| `POST` | `/wallets/:walletId/reconciliation`                                   | confere o saldo contra o ledger                                      |
+| `POST` | `/wagering/transactions`                                              | submete uma transação (`BET`, `WIN`, `LOSS`, `REFUND` ou `ROLLBACK`) |
+| `GET`  | `/wagering/transactions/:transactionId`                               | consulta uma transação                                               |
+| `GET`  | `/providers/:providerId/wagering/transactions/:externalTransactionId` | consulta uma transação pelo id do provedor                           |
+| `GET`  | `/health/live`                                                        | o processo está de pé                                                |
+| `GET`  | `/health/ready`                                                       | Postgres e SQS alcançáveis                                           |
+| `GET`  | `/metrics`                                                            | métricas no formato Prometheus                                       |
+
+Envie `x-correlation-id` para rastrear uma requisição nos logs e nos eventos; sem ele, um id é gerado e devolvido no mesmo header.
 
 Criar uma carteira com saldo inicial:
 
