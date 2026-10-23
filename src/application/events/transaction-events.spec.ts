@@ -124,7 +124,10 @@ describe('eventsForTransaction', () => {
 
   it('emits pending reference', () => {
     const { wallet, transaction, context } = setup();
-    transaction.markPendingReference({ resultBalance: wallet.balance });
+    transaction.markPendingReference({
+      resultBalance: wallet.balance,
+      nextAttemptAt: at,
+    });
 
     const events = eventsForTransaction(
       transaction,
