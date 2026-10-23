@@ -1,3 +1,4 @@
+import type { SQSClient } from '@aws-sdk/client-sqs';
 import type { INestApplication } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
 import { AppModule } from '../../src/app.module.js';
@@ -11,6 +12,11 @@ import {
   type ReferenceRetryPolicy,
 } from '../../src/application/wagering/reference-retry-policy.js';
 import { createOrmConfig } from '../../src/infra/database/mikro-orm.config.js';
+import { SQS_CLIENT } from '../../src/infra/messaging/sqs-client.js';
+import {
+  SQS_CONSUMER_CONFIG,
+  type SqsConsumerConfig,
+} from '../../src/interfaces/sqs/wager-transactions.consumer.js';
 import {
   PENDING_REFERENCE_WORKER_CONFIG,
   type PendingReferenceWorkerConfig,
@@ -25,13 +31,15 @@ export interface TestAppOptions {
   lockTimeoutMs?: number;
   referenceRetryPolicy?: ReferenceRetryPolicy;
   pendingReferenceWorker?: PendingReferenceWorkerConfig;
+  sqsConsumer?: SqsConsumerConfig;
+  sqsClient?: SQSClient;
 }
 
 export async function createTestApp(
   databaseName: string,
   options: TestAppOptions = {},
 ): Promise<TestApp> {
-  const moduleRef = await Test.createTestingModule({ imports: [AppModule] })
+  const builder = Test.createTestingModule({ imports: [AppModule] })
     .overrideProvider(ORM_CONFIG)
     .useValue(createOrmConfig(databaseName))
     .overrideProvider(LOCK_TIMEOUT_MS)
@@ -46,7 +54,22 @@ export async function createTestApp(
         batchSize: 50,
       },
     )
-    .compile();
+    .overrideProvider(SQS_CONSUMER_CONFIG)
+    .useValue(
+      options.sqsConsumer ?? {
+        enabled: false,
+        queueUrl: '',
+        deadLetterQueueUrl: '',
+        waitTimeSeconds: 0,
+        maxMessages: 10,
+        retryBaseDelaySeconds: 1,
+        retryMaxDelaySeconds: 1,
+      },
+    );
+  if (options.sqsClient) {
+    builder.overrideProvider(SQS_CLIENT).useValue(options.sqsClient);
+  }
+  const moduleRef = await builder.compile();
 
   const app: INestApplication = moduleRef.createNestApplication({
     logger: false,

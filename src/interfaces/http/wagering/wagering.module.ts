@@ -37,5 +37,6 @@ import { WageringController } from './wagering.controller.js';
       inject: [UNIT_OF_WORK],
     },
   ],
+  exports: [SubmitWagerTransactionUseCase],
 })
 export class WageringModule {}
