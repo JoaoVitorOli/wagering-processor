@@ -13,7 +13,11 @@ export interface WagerPayload {
 }
 
 export function hashPayload(payload: WagerPayload): string {
-  return createHash('sha256').update(canonicalJson(payload)).digest('hex');
+  return hashCanonical(payload);
+}
+
+export function hashCanonical(value: unknown): string {
+  return createHash('sha256').update(canonicalJson(value)).digest('hex');
 }
 
 export function canonicalJson(value: unknown): string {

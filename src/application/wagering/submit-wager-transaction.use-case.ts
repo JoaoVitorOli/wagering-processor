@@ -48,7 +48,16 @@ export class SubmitWagerTransactionUseCase {
     this.processor = new TransactionProcessor(ids, clock);
   }
 
-  async execute(
+  execute(
+    input: SubmitWagerTransactionInput,
+  ): Promise<SubmitWagerTransactionResult> {
+    return this.unitOfWork.run((repositories) =>
+      this.executeIn(repositories, input),
+    );
+  }
+
+  async executeIn(
+    repositories: Repositories,
     input: SubmitWagerTransactionInput,
   ): Promise<SubmitWagerTransactionResult> {
     const money = Money.from(input.money);
@@ -79,43 +88,35 @@ export class SubmitWagerTransactionUseCase {
       createdAt: this.clock.now(),
     });
 
-    return this.unitOfWork.run(async (repositories) => {
-      const wallet = await repositories.wallets.findByIdForUpdate(
-        input.walletId,
-      );
-      if (!wallet) {
-        throw new WalletNotFoundError(input.walletId);
-      }
+    const wallet = await repositories.wallets.findByIdForUpdate(input.walletId);
+    if (!wallet) {
+      throw new WalletNotFoundError(input.walletId);
+    }
 
-      if (!(await repositories.transactions.addIfAbsent(transaction))) {
-        return this.replay(repositories, transaction);
-      }
+    if (!(await repositories.transactions.addIfAbsent(transaction))) {
+      return this.replay(repositories, transaction);
+    }
 
-      const outcome = await this.processor.process(
-        repositories,
-        wallet,
+    const outcome = await this.processor.process(
+      repositories,
+      wallet,
+      transaction,
+    );
+    if (outcome.pending) {
+      transaction.markPendingReference({
+        resultBalance: wallet.balance,
+        nextAttemptAt: nextReferenceAttemptAt(this.policy, 0, this.clock.now()),
+      });
+    }
+    await repositories.transactions.update(transaction);
+    await repositories.outbox.add(
+      this.processor.events(
         transaction,
-      );
-      if (outcome.pending) {
-        transaction.markPendingReference({
-          resultBalance: wallet.balance,
-          nextAttemptAt: nextReferenceAttemptAt(
-            this.policy,
-            0,
-            this.clock.now(),
-          ),
-        });
-      }
-      await repositories.transactions.update(transaction);
-      await repositories.outbox.add(
-        this.processor.events(
-          transaction,
-          wallet,
-          outcome.pending ? undefined : outcome.entry,
-        ),
-      );
-      return { transaction, idempotentReplay: false };
-    });
+        wallet,
+        outcome.pending ? undefined : outcome.entry,
+      ),
+    );
+    return { transaction, idempotentReplay: false };
   }
 
   private async replay(
