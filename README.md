@@ -25,6 +25,8 @@ Se a porta 5432 já estiver em uso na sua máquina, altere `POSTGRES_PORT` no `.
 
 `LOCK_TIMEOUT_MS` (padrão `5000`) define quanto tempo uma requisição espera pelo lock de uma carteira antes de responder 503.
 
+`PENDING_REFERENCE_WORKER_ENABLED` (padrão `true`) e `PENDING_REFERENCE_WORKER_INTERVAL_MS` (padrão `1000`) controlam o worker de referências pendentes.
+
 Para desenvolver com recarga automática:
 
 ```bash
