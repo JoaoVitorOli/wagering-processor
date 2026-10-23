@@ -3,6 +3,9 @@ import type {
   IntegrationEventEnvelope,
 } from '../events/integration-event.js';
 
+const RETRY_BASE_DELAY_MS = 1_000;
+const RETRY_MAX_DELAY_MS = 5 * 60_000;
+
 export interface OutboxMessageState {
   id: string;
   aggregateId: string;
@@ -66,5 +69,22 @@ export class OutboxMessage {
 
   isPending(): boolean {
     return this._publishedAt === undefined;
+  }
+
+  isDue(now: Date): boolean {
+    return this.isPending() && this._nextAttemptAt <= now;
+  }
+
+  markPublished(at: Date): void {
+    this._publishedAt = at;
+  }
+
+  scheduleRetry(now: Date): void {
+    const delay = Math.min(
+      RETRY_BASE_DELAY_MS * 2 ** this._attempts,
+      RETRY_MAX_DELAY_MS,
+    );
+    this._attempts += 1;
+    this._nextAttemptAt = new Date(now.getTime() + delay);
   }
 }
