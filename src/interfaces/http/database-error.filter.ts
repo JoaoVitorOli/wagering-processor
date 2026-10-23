@@ -5,14 +5,10 @@ import {
   HttpStatus,
   Logger,
 } from '@nestjs/common';
-import {
-  ConnectionException,
-  DeadlockException,
-  DriverException,
-} from '@mikro-orm/core';
+import { DriverException } from '@mikro-orm/core';
 import type { Response } from 'express';
+import { isTransientDatabaseError } from '../../infra/database/database-errors.js';
 
-const LOCK_NOT_AVAILABLE = '55P03';
 const RETRY_AFTER_SECONDS = '1';
 
 @Catch(DriverException)
@@ -22,7 +18,7 @@ export class DatabaseErrorFilter implements ExceptionFilter {
   catch(error: DriverException, host: ArgumentsHost): void {
     const response = host.switchToHttp().getResponse<Response>();
 
-    if (isTransient(error)) {
+    if (isTransientDatabaseError(error)) {
       this.logger.warn(error.message);
       response
         .status(HttpStatus.SERVICE_UNAVAILABLE)
@@ -40,12 +36,4 @@ export class DatabaseErrorFilter implements ExceptionFilter {
       message: 'Unexpected error',
     });
   }
-}
-
-function isTransient(error: DriverException): boolean {
-  return (
-    error instanceof DeadlockException ||
-    error instanceof ConnectionException ||
-    error.code === LOCK_NOT_AVAILABLE
-  );
 }
