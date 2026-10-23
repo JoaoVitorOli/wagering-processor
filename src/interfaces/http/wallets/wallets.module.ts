@@ -10,6 +10,8 @@ import {
 } from '../../../application/ports/unit-of-work.js';
 import { CreateWalletUseCase } from '../../../application/wallets/create-wallet.use-case.js';
 import { GetWalletUseCase } from '../../../application/wallets/get-wallet.use-case.js';
+import { ListLedgerUseCase } from '../../../application/wallets/list-ledger.use-case.js';
+import { ReconcileWalletUseCase } from '../../../application/wallets/reconcile-wallet.use-case.js';
 import { WalletsController } from './wallets.controller.js';
 
 @Module({
@@ -24,6 +26,17 @@ import { WalletsController } from './wallets.controller.js';
     {
       provide: GetWalletUseCase,
       useFactory: (unitOfWork: UnitOfWork) => new GetWalletUseCase(unitOfWork),
+      inject: [UNIT_OF_WORK],
+    },
+    {
+      provide: ListLedgerUseCase,
+      useFactory: (unitOfWork: UnitOfWork) => new ListLedgerUseCase(unitOfWork),
+      inject: [UNIT_OF_WORK],
+    },
+    {
+      provide: ReconcileWalletUseCase,
+      useFactory: (unitOfWork: UnitOfWork) =>
+        new ReconcileWalletUseCase(unitOfWork),
       inject: [UNIT_OF_WORK],
     },
   ],
