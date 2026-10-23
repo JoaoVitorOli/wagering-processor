@@ -387,3 +387,48 @@ Métricas em `/metrics`: transações por status, duplicatas, retries, DLQ, conf
 ## Autenticação
 
 Não implementada, como o enunciado permite. O desenho seria um IdP externo (ex.: Keycloak) com client credentials por provedor, conferindo que o `providerId` do token é o do corpo. O ponto de extensão é o `ProviderAuthGuard`, hoje sem efeito, aplicado às rotas de provedor.
+
+## Interpretações adotadas
+
+Pontos em que o enunciado é ambíguo ou não fala nada. Os detalhes estão nas seções indicadas.
+
+- **Regra 4, reversão "pelo mesmo tipo":** uma reversão por transação, de qualquer tipo, para não haver crédito duplicado (Referências).
+- **WIN e LOSS:** podem ter referência ou não, e só para BET; LOSS aceita `0.00` (Efeito de cada operação).
+- **BET com referência, autorreferência e ROLLBACK de ROLLBACK:** recusados (Efeito de cada operação).
+- **Referência pendente, recusada ou ausente:** espera, `REFERENCE_NOT_PROCESSED` ou `REFERENCE_NOT_FOUND` depois de ~5 min (Referências).
+- **Status HTTP do replay:** o mesmo da primeira resposta, com `idempotentReplay: true`; uma pendente já resolvida devolve o estado atual (Idempotência, Referências).
+- **Mesmo id externo com outra chave:** 409 `EXTERNAL_TRANSACTION_CONFLICT` (Idempotência).
+- **`walletId` inexistente:** 404 no HTTP e DLQ com `WALLET_NOT_FOUND` na fila; nada é gravado, porque não há carteira onde gravar.
+- **Status `PENDING`:** existe só dentro da transação SQL; a linha nasce PENDING e é atualizada antes do commit, então ninguém de fora a vê assim.
+- **Status `FAILED`:** reservado. Falhas de infraestrutura fazem rollback e respondem 503, ou vão para a DLQ, sem gravar transação.
+- **Comparar moedas diferentes:** `equals` devolve `false`; as contas lançam erro (Money).
+- **Transação de abertura:** provedor `internal`, já `PROCESSED` (Transações).
+
+## Trade-offs
+
+- **Lock pessimista por carteira:** apostas na mesma carteira esperam em fila; em troca, a resposta é sempre a certa, sem repetição por conflito de versão.
+- **Gravar PENDING e depois atualizar:** custa um UPDATE a mais, mas o `ON CONFLICT DO NOTHING` decide replay ou conflito antes de qualquer débito.
+- **Workers por polling (1 s):** até ~1 s de atraso e uma consulta por segundo (barata, pelo índice parcial); em troca, funciona com várias instâncias sem coordenação.
+- **Ordem dos eventos por carteira:** um evento que falha segura os seguintes da mesma carteira; as outras carteiras seguem.
+- **Publisher segura o lock enquanto chama o SQS:** transação um pouco mais longa, mas nenhum outro publisher pega a mesma linha.
+- **`decimal.js` em vez de `bigint` em centavos:** contas mais legíveis, ao custo de uma dependência e de configurar a precisão.
+- **Recusar mais de 2 casas em vez de arredondar:** nenhum centavo inventado; o provedor precisa corrigir o payload.
+- **Migrações geradas das entidades:** menos SQL à mão, mas o SQL gerado precisa ser revisado.
+- **Um banco por arquivo de teste:** isolamento total, alguns segundos a mais por arquivo.
+
+## Limitações conhecidas
+
+- Autenticação não implementada (ver Autenticação).
+- O banco não garante que a moeda da transação seja a da carteira, nem que a referência seja da mesma carteira; o caso de uso garante, dentro do lock. Uma FK composta `(wallet_id, currency)` fecharia isso no banco.
+- Depois que um REFUND é desfeito por ROLLBACK, a BET não pode ser reembolsada de novo.
+- A política de tentativas das referências pendentes é fixa no código; só o intervalo e o liga/desliga vêm do ambiente.
+- Os testes de integração precisam do Postgres e do LocalStack de pé.
+- Não há teste automatizado com o Postgres caindo no meio do processamento; o caminho é o mesmo do lock timeout (erro transitório → 503 ou nova entrega).
+
+## Com mais tempo
+
+- Ledger encadeado (hash do lançamento anterior em cada linha), para provar no banco que nada foi alterado.
+- CI no GitHub Actions com Postgres e LocalStack.
+- Teste de carga.
+- FK composta para moeda e carteira da referência.
+- Autenticação com um IdP externo.
