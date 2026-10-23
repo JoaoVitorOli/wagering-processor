@@ -10,6 +10,14 @@ export class IdempotencyConflictError extends DomainError {
   }
 }
 
+export class TransactionNotFoundError extends DomainError {
+  readonly code = 'TRANSACTION_NOT_FOUND';
+
+  constructor(description: string) {
+    super(`Transaction ${description} not found`);
+  }
+}
+
 export class ExternalTransactionConflictError extends DomainError {
   readonly code = 'EXTERNAL_TRANSACTION_CONFLICT';
 
