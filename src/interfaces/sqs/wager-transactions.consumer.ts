@@ -17,6 +17,7 @@ import { ConsumeWagerMessageUseCase } from '../../application/wagering/consume-w
 import { DomainError } from '../../domain/shared/domain-error.js';
 import { SQS_CLIENT } from '../../infra/messaging/sqs-client.js';
 import { isTransientDatabaseError } from '../../infra/database/database-errors.js';
+import { failpoint } from '../../infra/failpoints.js';
 import { wagerMessageSchema } from './wager-message.schema.js';
 
 export const SQS_CONSUMER_CONFIG = Symbol('SqsConsumerConfig');
@@ -124,6 +125,7 @@ export class WagerTransactionsConsumer
       return this.retryLater(message);
     }
 
+    failpoint('sqs-consumer:after-commit');
     await this.sqs.send(
       new DeleteMessageCommand({
         QueueUrl: this.config.queueUrl,
