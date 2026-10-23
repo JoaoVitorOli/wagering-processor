@@ -31,15 +31,15 @@ As dependências apontam para dentro: `interfaces` e `infra` conhecem `applicati
 
 O runtime do projeto é feito usando Bun, assim como exigido no enunciado. A versão fica fixa em `packageManager` e `engines` no `package.json` para que todo mundo rode a mesma versão. O Bun também é o gerenciador de pacotes e o test runner.
 
-Não existe etapa de build no projeto. O Bun executa o Typescript direto, por isso não tem `nest build` nem `dist`.
+Não existe etapa de build no projeto. O Bun executa o TypeScript direto, por isso não tem `nest build` nem `dist`.
 
 Como o Bun não checa tipos, a checagem fica a cargo do `bun run typecheck`.
 
-Foi removido a CLI do Nest (`nest-cli.json` `tsconfig.build.json`), são ferramentas que para essa apliação não vão ter uso, pois não vai haver etapa de build (por conta do bun) e os modulos do Nest não vão ser gerados pela CLI.
+O projeto não usa o CLI do Nest (`nest-cli.json`, `tsconfig.build.json`): não existe etapa de build e os módulos do Nest são escritos à mão.
 
 ## Docker
 
-Versões fixas da imagem do Postgres para que todos que executem tenham a mesma infra. A porta é configurável através do `POSTGRES_PORT`.
+As imagens têm versão fixa (`postgres:16-alpine` e `localstack/localstack:4.8.1`), para que todos que executem tenham a mesma infra. As portas são configuráveis por `POSTGRES_PORT` e `LOCALSTACK_PORT`.
 
 ## Persistência
 
@@ -49,7 +49,7 @@ A função `createOrmConfig` (`src/infra/database/mikro-orm.config.ts`) gera a c
 
 As entidades persistentes ficam em `src/infra/database/entities` e são feitas usando o `defineEntity`, sem decorators.
 
-Os valores são definidos com `p.decimal('string').precision(18).scale(2)` que no final são `numeric(18,2)`, que são lidos como string. Nunca passam por number.
+Os valores são definidos com `p.decimal('string').precision(18).scale(2)`, que no banco vira `numeric(18,2)` e é lido como string. Nunca passam por `number`.
 
 Os mappers (`src/infra/database/mappers`) convertem o domínio na linha do banco e de volta. A leitura usa `rehydrate`, e o dinheiro volta com `Money.from`.
 
@@ -109,7 +109,7 @@ Usam o PostgreSQL real, sem mock. Cada arquivo de teste cria um banco aleatório
 - o ledger não permite apagar linhas;
 - todo teste também prova que as migrações funcionam.
 
-O teste de integração dos schemas conferem o nome da constraint que é retornada quando algo errado é passado, há também casos positivos validando outra moeda, outro provedor, LOSS com 0, REFUND + ROLLBACK da mesma referência.
+Os testes de schema conferem o nome da constraint que recusa cada dado errado. Também há casos positivos: outra moeda para o mesmo jogador, o mesmo id externo em outro provedor, LOSS com `0.00` e reversões recusadas que não ocupam o índice de reversão.
 
 Os testes HTTP sobem o `AppModule` real e trocam só a configuração do banco (`ORM_CONFIG`), apontando para o banco descartável. As requisições usam `fetch` numa porta livre. Além das respostas, os testes conferem direto no banco que a OPENING e o lançamento foram gravados.
 
@@ -127,7 +127,9 @@ O `src/domain/shared/domain-error.ts` é uma classe abstrata que é a base de to
 
 ## Money
 
-O `decimal.js` foi a escolha final para lidar com o dinheiro, que faz as contas decimais exatas, como por exemplo: o `decimal.js` garante que `0.1 + 0.2` seja `0.3`. O `number` é proibido para dinheiro.
+O dinheiro usa o `decimal.js`, que faz as contas decimais exatas: `0.1 + 0.2` é `0.3`. O `number` é proibido para dinheiro.
+
+O valor é conferido por uma regex antes de chegar no `Decimal`, porque o `Decimal` aceitaria `1e3` e `Infinity`. A regex permite até 16 dígitos inteiros, o mesmo limite da coluna `numeric(18,2)`. O `Money` usa uma cópia do `Decimal` com precisão própria (`Decimal.clone({ precision: 40 })`), para não depender da configuração global.
 
 As regras de entrada são lidadas com o `Money.from` que transforma, por exemplo, `'25.5'` em `'25.50'`, os valores saem como string e com duas casas.
 
@@ -141,11 +143,11 @@ Somar, subtrair e comparar com `isLessThan` lançam `CurrencyMismatchError`, por
 
 A `Wallet` é o aggregate root, o saldo só muda por `debit` e `credit`, os dois sempre geram o lançamento, os dois devolvem o `WalletLedgerEntry` correspondente.
 
-O `version` sempre começa por 1, só vai mudar quando o saldo for alterado.
+O `version` começa em 1, com ou sem saldo inicial, e só sobe quando o saldo muda.
 
-O `Wallet.open` cria o lançamento de abertura com saldo inicial maior que zero. Com saldo zero, não cria lançamento e o `version` não é alterado. Saldo inicial negativo é recusado.
+O `Wallet.open` cria o lançamento de abertura com saldo inicial maior que zero. Com saldo zero, não cria lançamento. Saldo inicial negativo é recusado.
 
-O `canDebit` apenas faz a consulta para garantir que se pode fazer um débito.
+O `canDebit` só consulta se o débito cabe no saldo. Quem escolhe o `failureCode` é o caso de uso, porque a carteira não sabe se é uma aposta ou uma reversão (ver Códigos de falha). O `debit` ainda lança `InsufficientFundsError` como última proteção.
 
 O lançamento é criado e validado antes de a carteira mudar. Se a validação falhar, a carteira fica exatamente como estava.
 
@@ -185,7 +187,7 @@ A transação é gravada com `INSERT ... ON CONFLICT DO NOTHING`. Se nada foi in
 
 ## Concorrência
 
-Não existem lock global, então não há bloqueio de carteiras diferentes.
+Não existe lock global, então não há bloqueio de carteiras diferentes.
 
 A unidade de concorrência é a carteira. Toda operação que mexe no saldo começa travando a linha da carteira (`SELECT ... FOR UPDATE`) e só solta no commit ou no rollback.
 
@@ -203,7 +205,7 @@ Cada transação tem `lock_timeout` (`LOCK_TIMEOUT_MS`, padrão 5 s). Se a carte
 
 Fazer o reenvio é seguro, pois o erro acontece antes do commit, quer dizer que houve o rollback e nada foi gravado. Caso o provedor reenvie, a idempotência aplica só a primeira.
 
-Workers em várias instâncias: cada um trava a carteira e relê a transação; se já não estiver pendente, pula.
+O worker de referências pendentes pode rodar em várias instâncias: cada um trava a carteira e relê a transação; se ela já não estiver pendente, pula.
 
 ## Outbox
 
@@ -301,8 +303,8 @@ O `resultBalance` é sempre o saldo da carteira, na moeda dela, inclusive quando
 
 ## Códigos de falha (`failure-code`)
 
-- `INSUFFICIENT_FUNDS` - Sem fundos suficientes para fazer a aposta. O provedor não deve reenviar a mesma operação
-- `PROCESSING_FAILED` - Erro permanente de infraestrutura, deve ser investigado antes de reenviar.
+- `INSUFFICIENT_FUNDS` - Sem fundos suficientes para fazer a aposta. O provedor não deve reenviar a mesma operação.
+- `PROCESSING_FAILED` - Reservado para erro permanente de infraestrutura (status `FAILED`); deve ser investigado antes de reenviar. Nenhum fluxo usa hoje.
 - `CURRENCY_MISMATCH` - A moeda da transação é diferente da moeda da carteira. O provedor deve corrigir o payload, não reenviar igual.
 - `PLAYER_MISMATCH` - O jogador da transação não é o dono da carteira. O provedor deve corrigir o payload, não reenviar igual.
 - `REVERSAL_WOULD_OVERDRAW` - A reversão deixaria o saldo negativo (por exemplo, o ROLLBACK de um WIN que já foi apostado). Fica registrada e não deve ser reenviada igual.
@@ -315,7 +317,7 @@ O `resultBalance` é sempre o saldo da carteira, na moeda dela, inclusive quando
 
 `INSUFFICIENT_FUNDS` e `REVERSAL_WOULD_OVERDRAW` são separados, como o enunciado pede: uma aposta sem saldo e uma reversão que estouraria o saldo são situações operacionais diferentes. Por isso a carteira expõe `canDebit` separado de `debit`: quem escolhe o código é o caso de uso.
 
-O `failure code` não possui um CHECK de lista, ele é um varchar e foi definido assim porque ele vai crescer conforme o desenvolvimento, e o campo não mexe com dinheiro.
+O `failure_code` não tem CHECK de lista: é um texto, para que um código novo não precise de migração. O domínio garante os valores, e o campo não mexe com dinheiro.
 
 ## API
 
@@ -326,6 +328,7 @@ A submissão de transação responde pelo status da transação, sempre com o co
 - 200: PROCESSED
 - 422: REJECTED por regra de negócio; o corpo traz o `failureCode`
 - 202: PENDING_REFERENCE (aceita, processamento pendente)
+- 500: FAILED (reservado, ver `PROCESSING_FAILED`)
 
 Todo erro responde no formato `{ code, message }`. O `DomainErrorFilter` escolhe o status pelo `code`:
 
@@ -337,4 +340,4 @@ Todo erro responde no formato `{ code, message }`. O `DomainErrorFilter` escolhe
 
 Os erros do banco passam pelo `DatabaseErrorFilter`: os transitórios viram 503 e os demais viram 500, sem expor SQL na resposta.
 
-O filtro para esses erros é registrado com o `APP_FILTER` no `AppModule`, dessa forma os testes tem acesso as mensagens de filtro.
+Os filtros são registrados com `APP_FILTER` no `AppModule`, e não no `main.ts`: os testes sobem o `AppModule` sem executar o `main.ts`, e assim os filtros valem nos dois.
