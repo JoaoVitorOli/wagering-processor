@@ -29,6 +29,8 @@ Se a porta 5432 já estiver em uso na sua máquina, altere `POSTGRES_PORT` no `.
 
 `docker compose up -d --wait` sobe o Postgres e o LocalStack; as filas SQS são criadas na subida. `SQS_CONSUMER_ENABLED=false` desliga o consumidor da fila.
 
+`OUTBOX_PUBLISHER_ENABLED` (padrão `true`) e `OUTBOX_PUBLISHER_INTERVAL_MS` (padrão `1000`) controlam o publisher da outbox; os eventos vão para `wagering-events.fifo`.
+
 Para desenvolver com recarga automática:
 
 ```bash
