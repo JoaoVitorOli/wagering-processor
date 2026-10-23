@@ -1,6 +1,7 @@
 import type { WagerTransaction } from '../../domain/wagering/wager-transaction.js';
 import type { Wallet } from '../../domain/wallet/wallet.js';
 import type { WalletLedgerEntry } from '../../domain/wallet/wallet-ledger-entry.js';
+import type { OutboxMessage } from '../outbox/outbox-message.js';
 
 export const UNIT_OF_WORK = Symbol('UnitOfWork');
 
@@ -27,10 +28,15 @@ export interface LedgerRepository {
   add(entry: WalletLedgerEntry): Promise<void>;
 }
 
+export interface OutboxRepository {
+  add(messages: OutboxMessage[]): Promise<void>;
+}
+
 export interface Repositories {
   wallets: WalletRepository;
   transactions: WagerTransactionRepository;
   ledger: LedgerRepository;
+  outbox: OutboxRepository;
 }
 
 export interface UnitOfWork {
