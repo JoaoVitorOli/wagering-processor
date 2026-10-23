@@ -76,7 +76,9 @@ Transações:
 - valor positivo (LOSS aceita `0.00`);
 - REFUND e ROLLBACK exigem referência, OPENING e BET não têm, e ninguém referencia a si mesmo;
 - `failure_code` só em REJECTED/FAILED, `processed_at` só nos status finais;
-- uma reversão processada por tipo para a mesma referência (índice único parcial).
+- uma única reversão processada por transação, de qualquer tipo (índice único parcial em `reference_transaction_id`).
+
+Ledger: valor positivo, saldos nunca negativos, `antes ± valor = depois`, um lançamento por transação, e nenhuma linha pode ser alterada ou apagada (triggers).
 
 Criar carteira não faz SELECT antes do INSERT. Duas requisições simultâneas veriam "não existe" ao mesmo tempo, então o SELECT não protegeria. Quem decide é a `unique (player_id, currency)`: o repositório traduz a violação em `WalletAlreadyExistsError`, que vira 409. Um teste com 5 requisições simultâneas confirma que só uma grava.
 
@@ -105,6 +107,8 @@ O teste de integração dos schemas conferem o nome da constraint que é retorna
 Os testes HTTP sobem o `AppModule` real e trocam só a configuração do banco (`ORM_CONFIG`), apontando para o banco descartável. As requisições usam `fetch` numa porta livre. Além das respostas, os testes conferem direto no banco que a OPENING e o lançamento foram gravados.
 
 Os testes de concorrência sobem três instâncias da aplicação apontando para o mesmo banco e disparam requisições em paralelo: duas apostas de 80 numa carteira de 100, 50 cópias da mesma aposta e 45 requisições espalhadas pelas três instâncias. Também conferem que travar uma carteira não bloqueia outra e que um lock além do limite responde 503, com o reenvio aplicado uma vez. Todos terminam conferindo que o saldo da carteira é igual à soma do ledger. Sem o `FOR UPDATE`, esses testes falham.
+
+Os testes de referência cobrem cada tipo, cada código de falha, a regra de uma reversão por transação e a referência ausente. Um teste de concorrência envia um REFUND e um ROLLBACK da mesma BET ao mesmo tempo, por instâncias diferentes, e confere que só um é aplicado.
 
 ## Erros globais de regras de negócio
 
@@ -208,6 +212,12 @@ As transições permitidas ficam numa tabela no código, e é ela que define qua
 - LOSS - nenhum
 - ROLLBACK - o inverso das referências acima, crédito para BET e débito para WIN e REFUND.
 
+O que cada tipo pode referenciar:
+
+- WIN e LOSS: uma BET, opcionalmente;
+- REFUND: uma BET;
+- ROLLBACK: uma BET, um WIN ou um REFUND. ROLLBACK de ROLLBACK é recusado.
+
 O enunciado diz que o WIN "pode" referenciar a BET. Então WIN e LOSS são aceitos com ou sem referência.
 
 A BET com referência é recusada, porque uma aposta não reverte nem completa outra operação.
@@ -215,6 +225,23 @@ A BET com referência é recusada, porque uma aposta não reverte nem completa o
 A transação que referencia a si mesma é recusada também, ela ficaria esperando por ela mesma eternamente.
 
 O enunciado não definiu o valor do LOSS, então ele aceita `0.00`, porque não move saldo e só registra o resultado da rodada. As demais operações exigem valor positivo.
+
+## Referências
+
+A referência é procurada por `providerId` + `referenceExternalTransactionId` e conferida nesta ordem:
+
+1. não existe: a transação fica PENDING_REFERENCE (202) e é processada quando a referência chegar;
+2. de outro provedor, carteira, jogador, moeda ou rodada: `REFERENCE_CONTEXT_MISMATCH`;
+3. de um tipo que não pode ser referenciado: `REFERENCE_KIND_NOT_ALLOWED`;
+4. ainda PENDING_REFERENCE: esta também fica pendente;
+5. REJECTED ou FAILED: `REFERENCE_NOT_PROCESSED`;
+6. para REFUND e ROLLBACK: valor diferente do da referência dá `AMOUNT_MISMATCH`, e referência já revertida dá `REFERENCE_ALREADY_REVERSED`.
+
+Como a referência precisa ser da mesma carteira, ela também está protegida pelo lock da carteira.
+
+**Interpretação da regra 4.** O enunciado diz que uma referência não pode ser revertida duas vezes "pelo mesmo tipo". Lido ao pé da letra, uma BET aceitaria um REFUND e também um ROLLBACK, e o jogador receberia o valor de volta duas vezes. Crédito duplicado é falha eliminatória, então a regra adotada é mais rígida: cada transação pode ser revertida uma única vez, por qualquer tipo. O ROLLBACK de um REFUND continua permitido, porque reverte outra transação.
+
+**Limitação.** Depois que um REFUND é desfeito por um ROLLBACK, a BET original não pode ser reembolsada de novo: o REFUND continua contando como a reversão dela.
 
 ## Saldo no resultado
 
@@ -228,12 +255,20 @@ O `resultBalance` é sempre o saldo da carteira, na moeda dela, inclusive quando
 - `PROCESSING_FAILED` - Erro permanente de infraestrutura, deve ser investigado antes de reenviar.
 - `CURRENCY_MISMATCH` - A moeda da transação é diferente da moeda da carteira. O provedor deve corrigir o payload, não reenviar igual.
 - `PLAYER_MISMATCH` - O jogador da transação não é o dono da carteira. O provedor deve corrigir o payload, não reenviar igual.
+- `REVERSAL_WOULD_OVERDRAW` - A reversão deixaria o saldo negativo (por exemplo, o ROLLBACK de um WIN que já foi apostado). Fica registrada e não deve ser reenviada igual.
+- `REFERENCE_CONTEXT_MISMATCH` - A referência é de outro provedor, carteira, jogador, moeda ou rodada. Corrigir o payload.
+- `REFERENCE_KIND_NOT_ALLOWED` - O tipo da referência não pode ser referenciado por este tipo (REFUND de WIN, ROLLBACK de ROLLBACK). Corrigir o payload.
+- `REFERENCE_NOT_PROCESSED` - A referência existe, mas foi recusada ou falhou. Não reenviar.
+- `REFERENCE_ALREADY_REVERSED` - A referência já foi revertida. Não reenviar.
+- `AMOUNT_MISMATCH` - O valor da reversão é diferente do valor da referência. Corrigir o payload.
+
+`INSUFFICIENT_FUNDS` e `REVERSAL_WOULD_OVERDRAW` são separados, como o enunciado pede: uma aposta sem saldo e uma reversão que estouraria o saldo são situações operacionais diferentes. Por isso a carteira expõe `canDebit` separado de `debit`: quem escolhe o código é o caso de uso.
 
 O `failure code` não possui um CHECK de lista, ele é um varchar e foi definido assim porque ele vai crescer conforme o desenvolvimento, e o campo não mexe com dinheiro.
 
 ## API
 
-A validação da API acontece em dois níveis. Foi usado o `Zod` para conferir o formato (`playerId` é UUID, `amount` e `currency` são strings) e responde 400 `INVALID_PAYLOAD` com os campos que estão errados. O domínio `Money` cuida das regras do valor, que responde com `INVALID_MONEY`.
+A validação da API acontece em dois níveis. O zod confere o formato (`playerId` é UUID, `amount` e `currency` são strings) e responde 400 `INVALID_PAYLOAD` com os campos que estão errados. O domínio `Money` cuida das regras do valor, que responde com `INVALID_MONEY`.
 
 A submissão de transação responde pelo status da transação, sempre com o corpo da transação:
 
