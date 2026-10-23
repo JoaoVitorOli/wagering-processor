@@ -23,6 +23,8 @@ A aplicação sobe em `http://localhost:3000`. Para usar outra porta, altere `PO
 
 Se a porta 5432 já estiver em uso na sua máquina, altere `POSTGRES_PORT` no `.env` antes de subir o Docker.
 
+Se a porta 4566 estiver em uso, altere `LOCALSTACK_PORT` e troque a mesma porta em `SQS_ENDPOINT` e nas três URLs de fila (`*_QUEUE_URL`, `*_DLQ_URL`).
+
 `LOCK_TIMEOUT_MS` (padrão `5000`) define quanto tempo uma requisição espera pelo lock de uma carteira antes de responder 503.
 
 `PENDING_REFERENCE_WORKER_ENABLED` (padrão `true`) e `PENDING_REFERENCE_WORKER_INTERVAL_MS` (padrão `1000`) controlam o worker de referências pendentes.
@@ -81,6 +83,18 @@ curl -s -X POST localhost:3000/wagering/transactions \
   -H 'Idempotency-Key: provider-a:transaction-124' \
   -d '{"providerId":"provider-a","externalTransactionId":"transaction-124","playerId":"0192f28f-5dc0-7d58-bdb2-814ad6a0f4a1","walletId":"<walletId>","roundId":"round-987","gameId":"fortune-chimp","kind":"REFUND","money":{"amount":"25.00","currency":"BRL"},"referenceExternalTransactionId":"transaction-123"}'
 ```
+
+A mesma operação também pode chegar pela fila `wager-transactions.fifo`. O grupo da mensagem é a carteira, e a chave de idempotência vai dentro de `data`:
+
+```bash
+docker compose exec localstack awslocal sqs send-message \
+  --queue-url http://localhost:4566/000000000000/wager-transactions.fifo \
+  --message-group-id '<walletId>' \
+  --message-deduplication-id message-200 \
+  --message-body '{"messageId":"message-200","type":"WagerTransactionRequested","occurredAt":"2026-10-23T12:00:00.000Z","data":{"providerId":"provider-a","externalTransactionId":"transaction-200","idempotencyKey":"provider-a:transaction-200","playerId":"0192f28f-5dc0-7d58-bdb2-814ad6a0f4a1","walletId":"<walletId>","roundId":"round-988","gameId":"fortune-chimp","kind":"BET","money":{"amount":"10.00","currency":"BRL"}}}'
+```
+
+O resultado aparece em `GET /providers/provider-a/wagering/transactions/transaction-200`. Mensagens que não podem ser processadas vão para `wager-transactions-dlq.fifo`, e os eventos publicados ficam em `wagering-events.fifo`.
 
 Valores de dinheiro são sempre strings decimais com até duas casas (`"25.00"`). Os status HTTP, os códigos de erro e as regras de idempotência estão em [ARCHITECTURE.md](ARCHITECTURE.md).
 
