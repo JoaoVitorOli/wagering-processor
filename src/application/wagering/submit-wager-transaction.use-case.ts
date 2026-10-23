@@ -1,22 +1,18 @@
 import { Money, type MoneyProps } from '../../domain/money/money.js';
-import { FailureCode } from '../../domain/wagering/failure-code.js';
 import {
   WagerTransaction,
   type WagerTransactionKind,
-  WagerTransactionStatus,
 } from '../../domain/wagering/wager-transaction.js';
-import {
-  LedgerDirection,
-  type WalletLedgerEntry,
-} from '../../domain/wallet/wallet-ledger-entry.js';
-import type { Wallet } from '../../domain/wallet/wallet.js';
-import { eventsForTransaction } from '../events/transaction-events.js';
-import { OutboxMessage } from '../outbox/outbox-message.js';
 import type { Clock } from '../ports/clock.js';
 import type { IdGenerator } from '../ports/id-generator.js';
 import type { Repositories, UnitOfWork } from '../ports/unit-of-work.js';
 import { WalletNotFoundError } from '../wallets/wallet.errors.js';
 import { hashPayload } from './payload-hash.js';
+import {
+  nextReferenceAttemptAt,
+  type ReferenceRetryPolicy,
+} from './reference-retry-policy.js';
+import { TransactionProcessor } from './transaction-processor.js';
 import {
   ExternalTransactionConflictError,
   IdempotencyConflictError,
@@ -40,17 +36,17 @@ export interface SubmitWagerTransactionResult {
   idempotentReplay: boolean;
 }
 
-type Resolution =
-  | { reference: WagerTransaction | undefined }
-  | { failure: FailureCode }
-  | { pending: true };
-
 export class SubmitWagerTransactionUseCase {
+  private readonly processor: TransactionProcessor;
+
   constructor(
     private readonly unitOfWork: UnitOfWork,
     private readonly ids: IdGenerator,
     private readonly clock: Clock,
-  ) {}
+    private readonly policy: ReferenceRetryPolicy,
+  ) {
+    this.processor = new TransactionProcessor(ids, clock);
+  }
 
   async execute(
     input: SubmitWagerTransactionInput,
@@ -95,14 +91,28 @@ export class SubmitWagerTransactionUseCase {
         return this.replay(repositories, transaction);
       }
 
-      const entry = await this.process(repositories, wallet, transaction);
+      const outcome = await this.processor.process(
+        repositories,
+        wallet,
+        transaction,
+      );
+      if (outcome.pending) {
+        transaction.markPendingReference({
+          resultBalance: wallet.balance,
+          nextAttemptAt: nextReferenceAttemptAt(
+            this.policy,
+            0,
+            this.clock.now(),
+          ),
+        });
+      }
       await repositories.transactions.update(transaction);
       await repositories.outbox.add(
-        eventsForTransaction(transaction, wallet, entry, () => ({
-          eventId: this.ids.next(),
-          correlationId: transaction.id,
-          occurredAt: this.clock.now(),
-        })).map(OutboxMessage.enqueue),
+        this.processor.events(
+          transaction,
+          wallet,
+          outcome.pending ? undefined : outcome.entry,
+        ),
       );
       return { transaction, idempotentReplay: false };
     });
@@ -125,125 +135,5 @@ export class SubmitWagerTransactionUseCase {
       throw new IdempotencyConflictError(submitted.idempotencyKey);
     }
     return { transaction: existing, idempotentReplay: true };
-  }
-
-  private async process(
-    repositories: Repositories,
-    wallet: Wallet,
-    transaction: WagerTransaction,
-  ): Promise<WalletLedgerEntry | undefined> {
-    const at = this.clock.now();
-    const reject = (code: FailureCode) => {
-      transaction.reject({ code, resultBalance: wallet.balance, at });
-      return undefined;
-    };
-
-    const contextFailure = this.checkWallet(wallet, transaction);
-    if (contextFailure) {
-      return reject(contextFailure);
-    }
-
-    const resolution = await this.resolveReference(repositories, transaction);
-    if ('pending' in resolution) {
-      transaction.markPendingReference({ resultBalance: wallet.balance });
-      return undefined;
-    }
-    if ('failure' in resolution) {
-      return reject(resolution.failure);
-    }
-    const { reference } = resolution;
-
-    if (!transaction.affectsBalance()) {
-      transaction.markProcessed({
-        resultBalance: wallet.balance,
-        referenceTransactionId: reference?.id,
-        at,
-      });
-      return undefined;
-    }
-
-    const direction = transaction.ledgerDirectionFor(reference);
-    if (
-      direction === LedgerDirection.Debit &&
-      !wallet.canDebit(transaction.money)
-    ) {
-      return reject(
-        transaction.isReversal()
-          ? FailureCode.ReversalWouldOverdraw
-          : FailureCode.InsufficientFunds,
-      );
-    }
-
-    const previousVersion = wallet.version;
-    const movement = {
-      entryId: this.ids.next(),
-      transactionId: transaction.id,
-      amount: transaction.money,
-      at,
-    };
-    const entry =
-      direction === LedgerDirection.Debit
-        ? wallet.debit(movement)
-        : wallet.credit(movement);
-    await repositories.wallets.update(wallet, previousVersion);
-    await repositories.ledger.add(entry);
-    transaction.markProcessed({
-      resultBalance: wallet.balance,
-      referenceTransactionId: reference?.id,
-      at,
-    });
-    return entry;
-  }
-
-  private checkWallet(
-    wallet: Wallet,
-    transaction: WagerTransaction,
-  ): FailureCode | undefined {
-    if (transaction.money.currency !== wallet.currency) {
-      return FailureCode.CurrencyMismatch;
-    }
-    if (transaction.playerId !== wallet.playerId) {
-      return FailureCode.PlayerMismatch;
-    }
-    return undefined;
-  }
-
-  private async resolveReference(
-    { transactions }: Repositories,
-    transaction: WagerTransaction,
-  ): Promise<Resolution> {
-    const externalId = transaction.referenceExternalTransactionId;
-    if (!externalId) {
-      return { reference: undefined };
-    }
-
-    const reference = await transactions.findByExternalId(
-      transaction.providerId,
-      externalId,
-    );
-    if (!reference) {
-      return { pending: true };
-    }
-    if (!transaction.sharesContextWith(reference)) {
-      return { failure: FailureCode.ReferenceContextMismatch };
-    }
-    if (!transaction.canReference(reference)) {
-      return { failure: FailureCode.ReferenceKindNotAllowed };
-    }
-    if (reference.status === WagerTransactionStatus.PendingReference) {
-      return { pending: true };
-    }
-    if (reference.status !== WagerTransactionStatus.Processed) {
-      return { failure: FailureCode.ReferenceNotProcessed };
-    }
-    if (transaction.isReversal()) {
-      if (!transaction.money.equals(reference.money)) {
-        return { failure: FailureCode.AmountMismatch };
-      }
-      if (await transactions.isReversed(reference.id)) {
-        return { failure: FailureCode.ReferenceAlreadyReversed };
-      }
-    }
-    return { reference };
   }
 }
